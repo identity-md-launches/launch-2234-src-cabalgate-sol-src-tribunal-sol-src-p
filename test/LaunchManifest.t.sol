@@ -266,12 +266,34 @@ contract AtomicManifestTest is ManifestFixture {
         _assertAddressWord(json, ".contracts[4].constructorArgs[9]", ORACLE_ASSET);
     }
 
+    /// Run 9's import audit (finding 52b08268): CabalGate's NatSpec named runs 2-8.5's two Sepolia
+    /// tokens (0x44a1… and 0x2b69…) for `oracleAsset` and `imd`. Run 9 passes imdTEST for both: the
+    /// deployed gate holds one token in both roles and the built notices name imdTEST, not the old ones.
+    function test_gateTakesImdTestForBothRolesAndItsNatSpecSaysSo() public {
+        string memory json = vm.readFile("launch.json");
+        assertEq(
+            vm.parseAddress(vm.parseJsonString(json, ".contracts[1].constructorArgs[2]")),
+            vm.parseAddress(vm.parseJsonString(json, ".contracts[1].constructorArgs[3]")),
+            "run 9: one token is the oracle fee asset and the pool IMD"
+        );
+        address[5] memory deployed = factory.deployAll(codes);
+        CabalGate gate = CabalGate(deployed[1]);
+        assertEq(address(gate.oracleAsset()), ORACLE_ASSET);
+        assertEq(address(gate.imd()), ORACLE_ASSET);
+
+        string memory artifact = vm.readFile("out/CabalGate.sol/CabalGate.json");
+        string memory feeNote = vm.parseJsonString(artifact, ".metadata.output.userdoc.methods['oracleAsset()'].notice");
+        string memory imdNote = vm.parseJsonString(artifact, ".metadata.output.userdoc.methods['imd()'].notice");
+        assertTrue(vm.contains(feeNote, "imdTEST"), feeNote);
+        assertTrue(vm.contains(imdNote, "imdTEST"), imdNote);
+        assertFalse(vm.contains(feeNote, "0x44a1"), feeNote);
+        assertFalse(vm.contains(imdNote, "0x2b69"), imdNote);
+    }
+
     function _assertAddressWord(string memory json, string memory key, address expected) internal pure {
         bytes32 word = keccak256(bytes(vm.parseJsonString(json, key)));
         string memory checksummed = vm.toString(expected);
-        assertTrue(
-            word == keccak256(bytes(checksummed)) || word == keccak256(bytes(vm.toLowercase(checksummed))), key
-        );
+        assertTrue(word == keccak256(bytes(checksummed)) || word == keccak256(bytes(vm.toLowercase(checksummed))), key);
     }
 }
 

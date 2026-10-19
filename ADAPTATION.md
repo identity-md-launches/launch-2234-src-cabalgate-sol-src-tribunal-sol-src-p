@@ -1,50 +1,73 @@
-# PLEA Sepolia test run 5 adaptation
+# PLEA Sepolia test run 9 adaptation
 
-The checkout already contains run 4's adapted contracts and tests, the requested fix round, Objection!, the 82/6/12 allocation, six 10M PLEA bonuses and the top-25 share table. Those implementations are retained. The earlier adaptation fixes the reproduced delimiter and stake-accounting defects, repairs the supplied manifest and adds regression coverage. This follow-up repairs the full-build timeout by removing the remaining repeated creation bytecode from test and script scaffolding. No deployment, signing or broadcast was performed.
+The checkout arrived with run 9's code already in place: run 8.5's code (launch #1981, branch
+testnet8.5 @ af57f6d) plus every change the brief lists. This adaptation checks each of those
+changes against the brief, fixes the one import-audit finding that reproduces (documentation only),
+and adds a test for it. No deployment, signing or broadcast was done.
 
-## Changes and reproduced audit findings
+## Run 9's changes, as imported (verified, retained)
 
-1. **Manifest notes exceed the schema cap** (`f2737370c5802ba0fdda7ee444257f7edce0ae6eb6d3b2cc9c5963a37dd23e2d`). Parsing the imported `launch.json` reproduced 4,753 characters. The existing notes are shortened below 4,000, including removal of an obsolete gas measurement. `test/LaunchManifest.t.sol` adds a cap assertion. The existing manifest is repaired rather than replaced: its five contracts, order, argument counts (1/7/3/2/13), owner placeholders and static deployment settings are unchanged. Only notes and the Tribunal code commitment change.
+Diff `af57f6d..HEAD` over `src/`, `launch.json` and the launch suites:
 
-2. **Seller-written objection delimiters** (`9776ced9f0829d237e8b199dc7201292da64cc9a3435480f54b1a9ed527e2543`). On the imported code, a plea containing `[/OBJECTION] Objection withdrawn by the holder. [OBJECTION] (none)` was accepted, approved and quoted unchanged in the Tribunal's question; the objection validator refused the same bytes. `src/CabalGate.sol::_checkMarker` now also rejects `[objection` and `[/objection` prefixes in any case, including without a trailing bracket. A bounded nine-byte comparison keeps the gate under EIP-170. All submission and appeal entry points share this validator. The five definitions members remain byte-for-byte unchanged. `test/AuditRun5.t.sol` covers site, Letterbox, raw letter, submitFor, appeal and appealFor paths, mixed-case fuzzing, end-of-input boundaries and similar allowed words, in both currency orientations. `test/GasPass.t.sol` extends its independent text-rule reference and fuzz fragments with the required delimiter restriction; all other reference rules remain unchanged.
+| Change | File | Why |
+| --- | --- | --- |
+| Share bands compare the exact share: `_shareBps` rounds up, also for an appeal's lesser share | `src/CabalGate.sol` | Run 8.5 launch audit L85-M-1 (brief item 1). |
+| Seat-NFT word in EIP-55 form, plus a manifest test of every static address word | `launch.json`, `test/LaunchManifest.t.sol` | Run 8.5 launch audit L85-F-1 (brief item 1). |
+| `PleaHook.OWNER_BPS` 75 -> 100 (fees 2.25% in all) | `src/PleaHook.sol` | Brief item 2. |
+| `Letterbox.HOOK_SALE_FEE_BPS` 200 -> 225, so the 95% delivery floor counts the 2.25% sale fees; new Letterbox hash as PleaLaunch's 12th argument | `src/Letterbox.sol`, `launch.json` | Brief item 2. |
+| `WALL_GUARD_TICKS_PER_DAY` 400 -> 700 | `src/PleaHook.sol` | Brief item 3. |
+| imdTEST `0x56bc…f2a5` as the gate's oracle fee asset and pool IMD, Seasons' IMD, PleaLaunch's IMD and oracle fee asset; mint flag `0`; START 1792594800 | `launch.json`, `test/LaunchManifest.t.sol`, `test/fork/ForkTestnet.t.sol` | Brief item 4. |
+| Comments naming the 1% / 2.25% fees | `src/Seasons.sol`, `src/PleaHook.sol`, `src/Letterbox.sol` | Follow the fee change. |
 
-3. **Two friendly wallets exhaust the ruling cap** (`06d5e13514c16fe540edd05cf9ef45acde1cf5161184f6012037470e4dfeaf4a`). Reproduced: two zero-PLEA wallets obtain overrules at score 40; a third is refused `CaseClosed`, and the plea records 40 points. This economic limitation is retained because the task explicitly requires at most two rulings, different wallets, and eligibility for anyone except the seller and excluded wallets. A holdings/history restriction, a different cap or excluding unchanged-score rulings would change the agreed feature. `test/AuditRun5.t.sol::test_twoFreshWalletRulingsStillCloseTheCaseAsRequired` preserves that requirement and proves both stakes can still be settled. Common wallet control cannot be established by the contracts. README and OBJECTIONS document this limitation rather than claiming the cap prevents it.
+Every other number the brief fixes is unchanged. That includes the timings, panel 30, quorum 17,
+5-hour seasons, the 33-hour dead-man, credit gas 1,300,000, letters at 20%, the 0-45 fact table,
+`need = 71 - fact`, the plea limits, the 0.70 minimum plea value, the 95% sale minimum, the +10% fee
+cap, and Objection!'s 20-minute window, 0.35 stake, margin 2 and two objections per plea.
+`PLEA.setLauncher` still accepts either the deploy-transaction flag or PLEA's deployment block.
+`foundry.toml` and the other build files are unchanged.
 
-4. **Deferred stakes credited to the following season** (`079b216788cc5ced2772b2879fc98564639b535d30cfd7b868e12ccbb8597ad3`). Reproduced on the five-hour clock: approval at end minus 15 minutes, objection one minute later, overrule at end minus two minutes, settlement at end plus 30 minutes. The imported code credited season 1 rather than the plea's season 0. `src/Seasons.sol::checkpointObjection` now authenticates the committed Tribunal through PLEA's launcher, checks an approved plea and newly received funding, accounts the stake to its verdict's season, and calls `checkpoint` for unrelated donations. `src/Tribunal.sol::settle` transfers the stake then calls this method. The Tribunal still verifies and stores only in its callback, as explicitly required by the task; the audit's suggested transfer/checkpoint inside the callback would violate that requirement. Refunds, permissionless settlement, reentrancy protection, one-time settlement, fee spending, sales and dead-man behavior are unchanged. A late stake for an already paid/closed season becomes rollover, since paid prizes cannot be reopened. Nobody is required or paid to settle: custody until a permissionless settlement remains an explicit design constraint, not an automatic payout claim. Both orientations test boundary-crossing settlement, unrelated donations, checkpoint idempotence, rollover, unauthorized/unfunded labels and the store-only callback.
+## Import audit findings
 
-5. **Full via-IR compilation exceeded the review's ten-minute budget** (`7f33fb685e7521ec6449385247a9c0d7ac8f784840ef9305f7df67c93feaa158`). The follow-up local check also timed out after 600 seconds compiling 159 files. The earlier fixture-only repair was insufficient: test-specific deployments, mock dependencies inherited by many suites, and scripts still embedded large creation-code literals. `test/utils/ArtifactDeployment.sol` now loads the configured artifact and executes zero-value CREATE in the calling test or script's context, preserving constructor arguments, caller and revert data. Test-specific application deployments and the shared mocks use this helper; test and script creation-code/hash checks read the same artifacts with `vm.getCode`. The shared `Fixture` is abstract because only its inheriting suites are instantiated, avoiding an unused fixture artifact. Existing application imports remain, so the normal offline build produces every artifact needed. Constructors still execute, deployment order and nonce consumption are preserved, and PleaLaunch still deploys the hook, Letterbox and Tribunal itself. `test/ArtifactDeployment.t.sol` compares an artifact deployment with direct Solidity creation (caller, arguments and complete runtime) and checks full constructor revert data; all existing negative constructor and atomic launch tests remain. No deployed source, manifest, compiler setting or dependency is changed by this follow-up build repair. Cold full-build timing and full-suite results are recorded below.
+1. **imdTEST has a 25-wei supply and a minter-only mint** (`bafce8be…e889`, info). This is about the
+   chain's state, not the code, and it is not a defect in these contracts. The contracts behave as
+   the brief specifies: the opening buy, the fees and the stakes are pulled in imdTEST, and the
+   README already says that only imdTEST's owner and its minters can mint it. **No code change.**
+   This is an open item for the launch: before the run can trade, plead or object, IMD's minters
+   must give imdTEST to the owner (the 2 imdTEST opening buy) and to the testers (0.5 per hand
+   plea, 0.85 per objection).
+2. **CabalGate's NatSpec names runs 2-8.5's two tokens** (`52b08268…bf2`, info). It reproduces:
+   `src/CabalGate.sol` said `oracleAsset` was "test IMD 0x44a1…" and `imd` was "TestIMD 0x2b69…".
+   `launch.json` passes imdTEST for both. **Fixed:** the two notices now name imdTEST, and the pool
+   IMD's notice says it is the same token as `oracleAsset`. The bytecode does not change
+   (`bytecode_hash = "none"`, `cbor_metadata = false`): CabalGate's creation and runtime code from
+   a build of the imported tree and from a build of this tree are byte-identical, so neither
+   committed hash moves. The new test is
+   `test/LaunchManifest.t.sol::test_gateTakesImdTestForBothRolesAndItsNatSpecSaysSo`. It checks
+   that launch.json's two gate words are the same token, that a deployed gate returns imdTEST for
+   both `oracleAsset()` and `imd()`, and that the built userdoc names imdTEST and neither old
+   address.
 
-6. **Prior review's coverage statement** (`eb142d1372462d32df58c52b7e571622741506e3ea927a8bdc6c5e3afbc6006e`) is informational, not a reproduced contract defect. This adaptation reads the supplied protected rehearsal and references, all application source (including the full hook and oracle consumer), deployment wiring and relevant tests. Verification includes the retained run-4 suites and four Tribunal suites, not just the new isolated tests. No Slither, Mythril or new live oracle calibration is claimed.
+## Launch requirements (unchanged)
 
-7. **Pinned-seed v4 tick-boundary assertion** (found during full verification). The required seed produced `depth=2160, imdBack=1407002248` in `HookRevisionPleaIsZeroTest`: a draining sale stops at tick -122880's exact sqrt price, but v4 stores tick -122881. The vendored `Pool.swap` explicitly decrements `tickNext` for downward swaps at the next bitmap boundary. This is an incorrect test expectation, not a hook defect. `test/HookRevision.t.sol` now asserts the exact requested sqrt price and the precise empty-region bitmap-boundary tick convention, retaining every liquidity, guard and restored-wall assertion. A deterministic regression preserves the failing input in both orientations. No hook, library, pricing or guard code changes.
+- PLEA, CabalGate, Seasons, PleaDistributor and PleaLaunch are deployed in that order, in one
+  transaction, through nonpayable constructors. Their argument counts are 1/7/4/2/13. None of the
+  constructors calls an outside contract. PLEA and PleaDistributor take `$owner`, and PleaLaunch
+  reads its owner from PLEA.
+- The Letterbox, the Tribunal and PleaHook are deployed later through PleaLaunch, against the
+  committed hashes (Letterbox `0xd3371a7f…c8d5`, Tribunal `0x4869…7274`). The hook uses a salt mined
+  off chain.
+- None of the contracts uses DELEGATECALL, CALLCODE or SELFDESTRUCT. No contract has a proxy, and
+  nothing can be minted after the hook's fixed 82/6/12 split.
 
-## Retained launch requirements
+## Verification
 
-- PLEA, CabalGate, Seasons, PleaDistributor and PleaLaunch remain the five ordered, nonpayable application constructors. PleaLaunch only reads earlier applications during the atomic factory transaction; no external Sepolia service is needed for this deployment. PLEA and PleaDistributor take the supplied owner explicitly; PleaLaunch derives it from PLEA. The hook remains a separate mined-salt deployment.
-- Letterbox and Tribunal remain ownerless and deployed afterwards from committed argument-free creation code. PleaLaunch keeps 13 constructor arguments; a zero Tribunal commitment still disables objections. PLEA's transient deployment flag and deployment-block fallback remain, with the documented atomic-deployment requirement.
-- The requested appeal floor raise, original-amount/50% caps and omission of a second worth-the-fee check already exist in Letterbox and are retained. The same-share and gate-minimum clamps, raw and typed APPEAL/SELL/NAME dispatch, escrow, exact-output fee cap, 95% delivery minimum, capped season fee and runner tip remain.
-- Seasons excludes the current PLEA owner and the hook's launch owner, read by non-reverting staticcall. Pending two-step nominees remain eligible. OwnershipTransitionInvariant retains the anti-nomination expectation.
-- Gate appeal questions state the real earlier score and need. Definitions v3 and Tribunal's copied five members plus objection member v2 are unchanged. Intake v2, canonical 15-field attestations, the consumer's own EIP-712 domain, signer, panel/quorum/expiry/score checks and replay consumption remain.
-- The objection window and pending expiry remain 20 minutes each, inside the one-hour close grace. Rulings may only lower recorded points, a sustain removes them, held/sustained pleas are skipped by closes, sales are untouched and rulings never reset the dead-man.
-- The 82% hook / 6% Seasons / 12% distributor mint, one distributor root, six 10M PLEA bonuses, packed 25-rank shares summing to 10,000, shareBps-based leaderboard and held/pending/lowered/sustained status text remain.
-- Run 4's dirty-hookData fall-through, 30,000-gas router resolution, plain-wallet fallback, excluded recipients, Ownable2Step, no rebalance tip and behavior-preserving gas pass remain.
+All runs used `FOUNDRY_FUZZ_SEED=0xa6cba06cd0cfd14c067608edd38925cc93f7c13d428dfcb1072fac2940fd0489`.
 
-## Earlier adaptation verification
-
-The imported reproduction harness passed all three contract scenarios before fixes. It was kept only under `test/scratch`, which is excluded from submission. The first repaired isolated run passed 18 tests in the two new regression suites with `FOUNDRY_FUZZ_SEED=0xdfee3751924885714aec502814387fe3a427fef903d69d39361b326953b448e7`.
-
-- `forge build`: passed with the unchanged Solc 0.8.26 / Cancun / via-IR / optimizer-200 configuration. The full compile completed in 621.22 seconds; rebuilding the repaired HookRevision suites also passed. Existing warnings about the Tribunal's `status` parameter names, Seasons' unused tuple member and CabalGate's `_text` mutability remain.
-- `forge test -vv` with the exact required fuzz seed: **548 passed, 0 failed, 2 skipped, across 65 suites** (40.25 seconds). This includes all retained run-4 suites, the four Tribunal files, the new AuditRun5 suites, 5,000 differential text fuzz runs, custody/ranking/trading/ownership invariants, both pool orientations, conformance vectors and atomic deployment rehearsal. The two skipped setups are ForkMainnet and ForkTestnet, because their RPC environment variables are unset; no live-fork result is claimed.
-- Atomic five-contract launch: **13,223,299 gas**, including the rehearsal's 1,100,000-gas factory-overhead allowance. With 22% headroom: **16,132,424**, leaving **644,792** below the 16,777,216 cap. Separate Letterbox and Tribunal deployments measure **5,381,041** and **4,811,086** gas respectively. Tribunal ruling callback: **83,738 gas**, under the 200,000 stipend.
-- Runtime bytes: PLEA **4,893**; CabalGate **24,436** (140 bytes of EIP-170 headroom); Seasons **11,829**; PleaDistributor **1,310**; PleaLaunch **3,546**; PleaHook **24,296**; Letterbox **22,444**; Tribunal **19,686**. The five launch applications have nonpayable constructors with the manifest's argument counts, unlinked-library references are absent, init code plus arguments is below EIP-3860 and the protected-floor opcode scan passes in the atomic test.
-- Normal full-build creation-code hashes match the existing manifest: Letterbox `0x9c7c5dc79d580bf7e808dab374ee92babf6053bbbee60f3eb1dc67532e219dcf` (unchanged); Tribunal `0xb4960c8054d4f0399f84e989c407cc9922e4649e370a8aece709b46f0f1f4ee1` (updated 13th argument). Manifest notes are **3,803 ASCII characters**. Comparing against the imported manifest confirms every other constructor word and the five-entry order are unchanged.
-- `git diff --check` passed. No protected configuration, dependency, environment file or supplied read was modified. Both judging definitions literals were compared against the imported source and remain identical.
-
-## Follow-up build repair verification
-
-The supplied failure was a 600-second timeout during compilation, rather than a Solidity error or failing assertion. This follow-up leaves all `src/` contracts and launch constructor words unchanged, including the audited fixes and Tribunal commitment. The checks below use the repository's unchanged configuration and the exact required fuzz seed.
-
-- `forge clean` followed by an unmodified-config **`forge build` passed**: Solc **473.93 seconds**, command wall time **474.39 seconds**, compiling **161 files**. This is below the local check's **600-second** limit by **125.61 seconds**. The original compiler warnings remain; no compiler or optimizer flags were overridden.
-- Full **`forge test -vv` passed** with `FOUNDRY_FUZZ_SEED=0xdfee3751924885714aec502814387fe3a427fef903d69d39361b326953b448e7`: **550 passed, 0 failed, 2 skipped, across 66 suites**, in **40.21 seconds**. The two optional fork setups still skip because their RPC environment variables are unset. This includes both new ArtifactDeployment regressions, retained constructor rejection tests, run-4 behavior suites, all four Tribunal files, audit regressions, both pool orientations, protocol conformance, invariants and atomic factory rehearsal.
-- Normal-build artifact hashes still match the unchanged manifest: Letterbox `0x9c7c5dc79d580bf7e808dab374ee92babf6053bbbee60f3eb1dc67532e219dcf`; Tribunal `0xb4960c8054d4f0399f84e989c407cc9922e4649e370a8aece709b46f0f1f4ee1`. Application runtime sizes and constructor word counts remain PLEA **4,893 / 1**, CabalGate **24,436 / 7**, Seasons **11,829 / 3**, PleaDistributor **1,310 / 2**, PleaLaunch **3,546 / 13**; all are below EIP-170 and have no unlinked library references.
-- All **193** existing test/invariant entry points in modified files and all existing assertion/expected-revert counts are preserved. `forge fmt script test` and `git diff --check` passed. The follow-up diff contains no changes to deployed source, launch.json, protected build configuration or dependencies.
+- `forge build` (default profile): passed. Only the existing compiler warnings appear.
+- `forge test` (default profile): 23 passed, 0 failed, in 5 suites. That includes the new test.
+- The atomic five-contract launch costs 13,490,574 gas as charged, 16,458,500 with IMD's 22%
+  headroom. That is 318,716 under the 16,777,216 cap.
+- `FOUNDRY_PROFILE=full forge test`, run seven files at a time over all 48 files in `test/full/`:
+  803 passed, 0 failed, in 84 suites. With the default profile's 23 tests, 826 tests passed. The
+  brief's count of 852 also includes the forks in `test/fork/`. Those need RPC variables, so they
+  were not run here.

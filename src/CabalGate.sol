@@ -135,9 +135,9 @@ contract CabalGate is OracleAttestationConsumer {
 
     IPLEA public immutable plea;
     IIntake public immutable intake;
-    /// @notice What the Intake is paid in (Sepolia: test IMD 0x44a1…; mainnet: IMD).
+    /// @notice What the Intake is paid in (Sepolia: imdTEST; mainnet: IMD).
     IERC20 public immutable oracleAsset;
-    /// @notice The pool's IMD (Sepolia: TestIMD 0x2b69…), used for the appeal's pool share.
+    /// @notice The pool's IMD (Sepolia: imdTEST, the same token as `oracleAsset`), used for the appeal's pool share.
     IERC20 public immutable imd;
     /// @notice Season length (read by Seasons) and the dead-man. Deploy-time so Sepolia can run a
     /// fast clock; on chain id 1 `PleaLaunch.seed` refuses anything below 15 days and 33 hours
