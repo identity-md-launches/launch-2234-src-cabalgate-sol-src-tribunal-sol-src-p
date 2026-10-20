@@ -1,10 +1,40 @@
-import { con, read, type Plea, type Snapshot } from "./chain";
+import { con, read, readPlea, type Plea, type Snapshot } from "./chain";
 import type { Runtime } from "./config";
-const min = (a: bigint, b: bigint) => (a < b ? a : b);
-const ceil = (a: bigint, b: bigint) => (a + b - 1n) / b;
-// The immutable share bands are the pinned CabalGate._factScoreAt definition. All current
-// holding, profit and trend facts still come from factScore; only its appeal share clamp is added.
-const sharePoints = (bps: bigint) => (bps <= 2000n ? 16 : bps <= 3500n ? 9 : 3);
+import {
+  LETTERBOX,
+  clampAppeal,
+  ceil,
+  min,
+  sharePoints,
+  pendingState,
+  Q96,
+} from "./models";
+export async function returnedEscrow(
+  r: Runtime,
+  s: Snapshot,
+  wallet: `0x${string}`,
+  now: number,
+) {
+  const [id] = await read(r, "Letterbox", "openOf", [wallet]);
+  if (!id) return { returned: 0n, blocked: "" };
+  const [escrow, plea] = await Promise.all([
+    read(r, "Letterbox", "escrowOf", [id]),
+    readPlea(r, id, s.v["CabalGate.intake"]),
+  ]);
+  const state = pendingState(
+    plea,
+    now,
+    Number(con(s, "CabalGate.EXECUTE_WINDOW")),
+    Number(con(s, "CabalGate.PENDING_EXPIRY")),
+  );
+  return {
+    returned: escrow[1] && state.settleable ? BigInt(escrow[2]) : 0n,
+    blocked:
+      escrow[1] && !state.settleable
+        ? `Plea #${id} is still open: one plea at a time.`
+        : "",
+  };
+}
 export async function appealPreview(
   r: Runtime,
   s: Snapshot,
@@ -13,47 +43,53 @@ export async function appealPreview(
   automatic: boolean,
   requested: bigint,
 ) {
-  const [balance, originalBalance, price] = (await Promise.all([
+  const [held, originalBalance, price, escrow] = await Promise.all([
     read(r, "PLEA", "balanceOf", [wallet]),
     read(r, "CabalGate", "pleaBalance", [p.id]),
     read(r, "PleaHook", "latestPrice"),
-  ])) as [bigint, bigint, bigint];
-  const maxShare = BigInt(con(s, "CabalGate.MAX_SHARE_BPS")),
-    maxSell = BigInt(con(s, "CabalGate.MAX_SELL"));
-  const minimum = min(
-    (min(balance, originalBalance || balance) *
-      BigInt(con(s, "CabalGate.MIN_SHARE_BPS"))) /
-      10000n,
-    maxSell,
+    automatic
+      ? returnedEscrow(r, s, wallet, s.timestamp)
+      : { returned: 0n, blocked: "" },
+  ]);
+  const balance = BigInt(held) + escrow.returned;
+  const result = clampAppeal(
+    p.amount,
+    balance,
+    originalBalance,
+    BigInt(con(s, "CabalGate.MAX_SELL")),
+    price,
+    automatic,
+    requested,
   );
-  let amount = requested;
-  if (automatic) {
-    amount = min(p.amount, (balance * maxShare) / 10000n);
-    if (originalBalance) {
-      amount = min(amount, (balance * p.amount) / originalBalance);
-      if (amount < minimum) amount = minimum;
-    }
-    // Run 9's immutable Letterbox MIN_SALE_VALUE is exactly twice the public wall-share constant.
-    // This equality is source-bound to deployment-input.json's accepted source commit.
-    const floorValue = BigInt(con(s, "CabalGate.APPEAL_POOL_SHARE")) * 2n;
-    if (price > 0n) {
-      const floor = ceil(floorValue * 2n ** 96n, price);
-      if (amount < floor)
-        amount = min(min(floor, p.amount), (balance * maxShare) / 10000n);
-    }
-  }
-  let fact = Number(await read(r, "CabalGate", "factScore", [wallet, amount]));
-  if (balance && originalBalance) {
-    const share = ceil(amount * 10000n, balance),
-      originalShare = ceil(p.amount * 10000n, originalBalance);
-    fact += sharePoints(min(share, originalShare)) - sharePoints(share);
-  }
+  let fact = Number(
+    await read(r, "CabalGate", "factScore", [wallet, result.amount]),
+  );
+  if (held && balance && originalBalance)
+    fact +=
+      sharePoints(
+        min(
+          ceil(result.amount * 10000n, balance),
+          ceil(p.amount * 10000n, originalBalance),
+        ),
+      ) - sharePoints(ceil(result.amount * 10000n, held));
+  const fee = BigInt(s.v.appealFees?.[1] || 0n);
+  const reason =
+    escrow.blocked ||
+    (automatic &&
+    price &&
+    (result.amount * price) / Q96 < LETTERBOX.MIN_SALE_VALUE
+      ? "Auto-sell needs a sale worth at least 0.70 imdTEST. Untick auto-sell to appeal manually."
+      : automatic &&
+          ((fee * 10n > balance && fee * 10000n > p.amount * 11000n) ||
+            result.amount + fee > balance)
+        ? "The auto-sell fee exceeds this appeal’s balance or fee cap. Untick auto-sell to pay from your imdTEST."
+        : "");
   return {
-    amount,
+    ...result,
     fact,
     need: Number(con(s, "CabalGate.PASS_MARK")) - fact,
-    minimum,
-    maximum: min(p.amount, (balance * maxShare) / 10000n),
     balance,
+    returned: escrow.returned,
+    reason,
   };
 }

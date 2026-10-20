@@ -17,7 +17,7 @@ test("indicative exact-input calculation charges both hook fee legs", () => {
     net = input - fee,
     next = (L * Q * Q + L * Q + net * Q - 1n) / (L * Q + net * Q),
     raw = (L * (Q - next)) / Q;
-  const out = estimateHookOutput({
+  const { out } = estimateHookOutput({
     amount: input,
     zeroForOne: true,
     sqrt: Q,
@@ -32,7 +32,7 @@ test("quotes are monotonic and never manufacture value at unit price", () => {
   let last = 0n;
   for (const size of [1n, 10n, 100n, 1000n, 10000n]) {
     const input = size * 10n ** 18n;
-    const out = estimateHookOutput({
+    const { out } = estimateHookOutput({
       amount: input,
       zeroForOne: false,
       sqrt: Q,
@@ -57,8 +57,8 @@ test("walks a second liquidity range when crossing its boundary", () => {
       inputBps: 0n,
       outputBps: 0n,
     };
-  const whole = estimateHookOutput({ ...params, bands });
-  const pieces = estimateHookOutput({ ...params, bands: split });
+  const whole = estimateHookOutput({ ...params, bands }).out;
+  const pieces = estimateHookOutput({ ...params, bands: split }).out;
   assert.ok(whole >= pieces && whole - pieces <= 3n);
 });
 test("price slippage is applied to price rather than twice to its square root", () => {

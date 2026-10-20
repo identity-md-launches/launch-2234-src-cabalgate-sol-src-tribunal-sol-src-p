@@ -75,9 +75,6 @@
   display: grid;
   gap: var(--space-4);
 }
-.stat__value {
-  overflow-wrap: anywhere;
-}
 .card,
 .panel,
 .stack,
@@ -85,14 +82,8 @@
 .status__side {
   min-width: 0;
 }
-.btn:disabled {
-  cursor: not-allowed;
-}
 .form-actions-top {
   margin-block: var(--space-3);
-}
-.status-strip .test-run {
-  width: 100%;
 }
 .tx-details {
   overflow-wrap: anywhere;
@@ -209,4 +200,34 @@
 .site-footer nav a {
   min-width: var(--target);
   justify-content: center;
+}
+
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+#root > .main {
+  flex: 1 0 auto;
+  width: 100%;
+}
+/* The fact rules fit in two wrapping columns, including inside the phone panel. */
+.facts-table {
+  width: 100%;
+  table-layout: fixed;
+}
+.facts-table th {
+  white-space: normal;
+}
+.facts-table th:first-child {
+  width: 38%;
+}
+.linked-card {
+  position: relative;
+}
+.linked-card__link {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
 }

@@ -7,11 +7,18 @@ import {
   type CSSProperties,
 } from "react";
 import { useAccount } from "wagmi";
-import { encodeFunctionData, type Address } from "viem";
+import { encodeFunctionData, getAddress, type Address } from "viem";
 import { useApp, useRead, useTx } from "./context";
 import {
   amount,
+  clock,
+  words,
+  span,
+  ago,
+  objectionLine,
+  soldFor,
   con,
+  val,
   duration,
   pleaState,
   read,
@@ -51,14 +58,23 @@ export const Panel = ({
   children,
   card = false,
   className = "",
+  level = 3,
 }: {
   title?: string;
   children: ReactNode;
   card?: boolean;
   className?: string;
+  level?: 2 | 3 | 4;
 }) => (
   <section className={`${card ? "card" : "panel"} stack ${className}`}>
-    {title && <h2 className="card__title">{title}</h2>}
+    {title &&
+      (level === 2 ? (
+        <h2 className="card__title">{title}</h2>
+      ) : level === 4 ? (
+        <h4 className="card__title">{title}</h4>
+      ) : (
+        <h3 className="card__title">{title}</h3>
+      ))}
     {children}
   </section>
 );
@@ -66,13 +82,17 @@ export const Notice = ({
   title,
   children,
   kind = "info",
+  icon,
 }: {
   title?: string;
   children: ReactNode;
   kind?: string;
+  icon?: string;
 }) => (
   <div className={`notice notice--${kind}`}>
-    <Icon name={kind === "bad" || kind === "warn" ? "warning" : "info"} />
+    <Icon
+      name={icon || (kind === "bad" || kind === "warn" ? "warning" : "info")}
+    />
     <div>
       {title && <p className="notice__title">{title}</p>}
       <div>{children}</div>
@@ -82,22 +102,37 @@ export const Notice = ({
 export const Empty = ({
   title,
   children,
+  icon = "scales",
+  action,
 }: {
   title: string;
   children: ReactNode;
+  icon?: string;
+  action?: { href: string; label: string };
 }) => (
   <div className="empty">
-    <span className="empty__icon">
-      <Icon name="gavel" />
-    </span>
+    <svg className="icon empty__icon" aria-hidden="true">
+      <use href={`#i-${icon}`} />
+    </svg>
     <p className="empty__title">{title}</p>
     <p>{children}</p>
+    {action && (
+      <a className="btn btn--sm" href={action.href}>
+        {action.label}
+      </a>
+    )}
   </div>
 );
-export const Costs = ({ rows }: { rows: [ReactNode, ReactNode][] }) => (
+export const Costs = ({
+  rows,
+  parts = [],
+}: {
+  rows: [ReactNode, ReactNode][];
+  parts?: number[];
+}) => (
   <dl className="costs">
     {rows.map(([a, b], i) => (
-      <div key={i}>
+      <div key={i} className={parts.includes(i) ? "is-part" : undefined}>
         <dt>{a}</dt>
         <dd>{b}</dd>
       </div>
@@ -111,6 +146,7 @@ export function AddressView({
   address: string;
   label?: string;
 }) {
+  address = getAddress(address);
   const { r, toast } = useApp();
   const [copied, setCopied] = useState(false);
   return (
@@ -130,7 +166,7 @@ export function AddressView({
           try {
             await navigator.clipboard.writeText(address);
             setCopied(true);
-            toast?.({ text: "Address copied." });
+            toast?.({ kind: "info", text: `${label} address copied.` });
             setTimeout(() => setCopied(false), 1500);
           } catch {
             toast?.({
@@ -150,43 +186,97 @@ export function Countdown({
   until,
   label,
   urgent = false,
+  block = false,
+  wait = false,
 }: {
   until: number;
   label: string;
   urgent?: boolean;
+  block?: boolean;
+  wait?: boolean;
 }) {
   const { now } = useApp();
   return (
     <span
-      className={`countdown ${urgent ? "countdown--urgent" : ""}`}
+      className={`countdown ${urgent ? "countdown--urgent" : ""} ${block ? "countdown--block" : ""} ${wait ? "countdown--wait" : ""}`}
       role="timer"
-      aria-label={`${label}: ${duration(until - now)} remaining, until ${utc(until)}`}
+      aria-label={`${label} ${words(until - now)}, by ${clock(until)}`}
     >
-      <span>{label}</span>
+      <span className="cluster cluster--sm">
+        <Icon name={wait ? "hourglass" : "timer"} />
+        {label}
+      </span>
       <span className="countdown__time">{duration(until - now)}</span>
+      {block && (
+        <span className="countdown__bar" aria-hidden="true">
+          <span
+            style={{
+              width: `${Math.max(0, Math.min(100, ((until - now) / (urgent ? 420 : 1200)) * 100))}%`,
+            }}
+          />
+        </span>
+      )}
     </span>
   );
 }
-export function TradingGate() {
+export function TradingGate({ onSeed }: { onSeed?: () => void } = {}) {
   const { s, now } = useApp();
+  const { address } = useAccount();
+  const tx = useTx("seed");
   if (!s)
     return (
-      <p className="loading-label">Reading trading status from Sepolia…</p>
+      <p className="loading-label">
+        <Icon name="hourglass" />
+        Reading trading status from Sepolia…
+      </p>
     );
   if (s.v["PleaHook.seeded"]) return null;
-  const start = Number(con(s, "PleaLaunch.START"));
+  const start = Number(con(s, "PleaLaunch.START")),
+    owner = address?.toLowerCase() === s.v["PLEA.owner"]?.toLowerCase(),
+    buy = location.hash.split("?")[0] === "#/buy";
   return (
     <div className="stack stack--sm">
       <Notice title="Trading is not open yet" kind="warn">
-        <p>Anyone may seed from {utc(start)}.</p>
+        <p>
+          {now < start
+            ? `Trading may open from ${utc(start)}.`
+            : `The opening time has passed. Trading opens when the pool is seeded.`}
+        </p>
       </Notice>
-      <Countdown
-        until={start}
-        label={now < start ? "Trading may open in" : "Seed is available"}
-      />
-      {now >= start && (
-        <TxButton name="PleaLaunch" fn="seed" label="Seed trading" />
+      {now < start && (
+        <div>
+          <Countdown until={start} label="Trading may open in" />
+        </div>
       )}
+      {owner &&
+        (buy ? (
+          <>
+            <p className="small">
+              Seeding opens trading for everyone. It creates the pool at a{" "}
+              {tokenAmount(con(s, "PleaHook.MARKET_CAP_IMD"), s, true)} market
+              cap and starts the Cabal’s{" "}
+              {span(Number(con(s, "CabalGate.DEADMAN")), "adj")} clock and the{" "}
+              {span(Number(con(s, "PleaHook.LAUNCH_WINDOW")), "adj")} launch
+              window. Make your opening{" "}
+              {tokenAmount(con(s, "PleaHook.PAYOUT_RESERVE"), s, true)} buy here
+              at once: its own shares join the pool, and every later buy then
+              pays cashback normally.
+            </p>
+            <Action
+              {...tx}
+              label="Seed trading"
+              primary={false}
+              block
+              onRun={async () => {
+                if (await tx.send("PleaLaunch", "seed")) onSeed?.();
+              }}
+            />
+          </>
+        ) : (
+          <a className="btn btn--sm" href="#/buy">
+            Seed on the Buy page <Icon name="arrow-right" />
+          </a>
+        ))}
     </div>
   );
 }
@@ -196,30 +286,125 @@ export function TextBox({
   value,
   onChange,
   currentName,
+  extraError,
+  fieldId,
 }: {
   kind?: "plea" | "objection" | "letter" | "name";
   label: string;
   value: string;
   onChange: (s: string) => void;
   currentName?: string;
+  extraError?: string;
+  fieldId?: string;
 }) {
-  const id = useId();
-  const { s } = useApp();
-  const result = textCheck(kind, value);
-  const max =
+  const automaticId = useId(),
+    id = fieldId || automaticId,
+    { s } = useApp(),
+    [touched, setTouched] = useState(false),
+    result = textCheck(kind, value),
+    bytes = window.PleaText.byteLength(value),
+    max =
+      kind === "name"
+        ? 20
+        : Number(
+            con(
+              s,
+              kind === "objection"
+                ? "Tribunal.MAX_TEXT_BYTES"
+                : "CabalGate.MAX_PLEA_BYTES",
+            ) || 280,
+          );
+  const current = kind === "name" && !!currentName && value === currentName,
+    bad = (!result.ok || !!extraError) && (touched || !!value),
+    idle = !touched && !value;
+  const issues = result.issues.filter(
+      (i: any) => !i.warning && i.code !== "clear",
+    ),
+    key = current
+      ? "current"
+      : extraError
+        ? "taken"
+        : result.ok
+          ? value
+            ? "ok"
+            : "empty"
+          : issues.map((i: any) => i.code).join(","),
+    last = useRef(key),
+    [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    if (touched && last.current !== key)
+      setAnnouncement(
+        current
+          ? "This is your current name."
+          : extraError
+            ? extraError
+            : result.ok
+              ? value
+                ? "Text passes the checks."
+                : ""
+              : `${issues.length} problems: ${issues[0]?.message || ""}`,
+      );
+    last.current = key;
+  }, [key, touched]);
+  const has = (code: string) =>
+      result.issues.some((i: any) => i.code === code && !i.warning),
+    lengthBad = has("empty") || has("too-long");
+  const rows =
     kind === "name"
-      ? 20
-      : Number(
-          con(
-            s,
-            kind === "objection"
-              ? "Tribunal.MAX_TEXT_BYTES"
-              : "CabalGate.MAX_PLEA_BYTES",
-          ) || 280,
-        );
-  const bytes =
-    kind === "letter" ? result.bytes : window.PleaText.byteLength(value);
-  const current = kind === "name" && value === currentName;
+      ? current
+        ? [{ text: "This is your current name.", ok: true }]
+        : !value && !currentName
+          ? [{ text: "Type a name: 3–20 of a–z, 0–9, _.", idle: true }]
+          : !value
+            ? [{ text: "An empty name clears your display name.", ok: true }]
+            : extraError
+              ? [{ text: extraError, ok: false }]
+              : result.ok
+                ? [
+                    {
+                      text: "Fits the rules. Names are unique: the chain says if it is taken.",
+                      ok: true,
+                    },
+                  ]
+                : issues.map((i: any) => ({ text: i.message, ok: false }))
+      : kind === "letter" &&
+          ["name", "clear-name", "sell"].includes(result.kind)
+        ? [{ text: result.reads || "SELL needs no text.", ok: result.ok }]
+        : [
+            {
+              text: idle
+                ? `1 to ${max} bytes`
+                : lengthBad
+                  ? bytes
+                    ? `1 to ${max} bytes: ${bytes} now, cut ${bytes - max}`
+                    : `1 to ${max} bytes: write something`
+                  : `1 to ${max} bytes (${bytes} used)`,
+              ok: !lengthBad,
+              idle,
+            },
+            {
+              text: "One line, no control characters",
+              ok: !has("control"),
+              idle,
+            },
+            {
+              text: "No hidden characters (zero-width, direction marks, variation selectors)",
+              ok: !has("refused") && !has("utf8"),
+              idle,
+            },
+            {
+              text: "No “[plea” or “[objection” markers, in any case",
+              ok: !has("marker"),
+              idle,
+            },
+            ...result.issues
+              .filter((i: any) => !["empty", "too-long"].includes(i.code))
+              .map((i: any) => ({
+                text: i.message,
+                ok: false,
+                warning: i.warning,
+              })),
+          ];
   return (
     <div className="field">
       <div className="field__top">
@@ -227,19 +412,24 @@ export function TextBox({
           {label}
         </label>
         <span className="field__aside">
-          {kind === "name" ? "3–20 of a–z, 0–9, _" : "One line, any language"}
+          {kind === "name"
+            ? "3–20 of a–z, 0–9, _"
+            : `One line, up to ${max} bytes`}
         </span>
       </div>
-      <div className={`textarea ${value && !result.ok ? "is-invalid" : ""}`}>
+      <div className={`textarea ${bad ? "is-invalid" : ""}`}>
         {kind === "name" ? (
           <input
             id={id}
             className="input__control name-input"
             value={value}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              setTouched(true);
+              onChange(e.target.value);
+            }}
             autoComplete="off"
             spellCheck={false}
-            aria-invalid={!result.ok}
+            aria-invalid={bad}
             aria-describedby={`${id}-checks`}
           />
         ) : (
@@ -247,95 +437,66 @@ export function TextBox({
             id={id}
             rows={4}
             value={value}
-            onChange={(e) => onChange(e.target.value)}
-            aria-invalid={!!value && !result.ok}
+            onChange={(e) => {
+              setTouched(true);
+              onChange(e.target.value);
+            }}
+            aria-invalid={bad}
             aria-describedby={`${id}-checks`}
           />
         )}
         <div className="textarea__bar">
-          <span className="counter">
+          <span className={`counter ${bytes > max ? "counter--over" : ""}`}>
             <span className="counter__meter" aria-hidden="true">
               <span
                 style={{ width: `${Math.min(100, (bytes / max) * 100)}%` }}
               />
             </span>
-            {bytes} / {max} bytes
+            {bytes} / {max} {kind === "name" ? "characters" : "bytes"}
           </span>
+          {kind !== "name" && (
+            <span className="small">≈ 280 Latin · 140 Cyrillic · 93 CJK</span>
+          )}
         </div>
       </div>
       <ul className="checks" id={`${id}-checks`}>
-        {current ? (
-          <li className="check">
-            <Icon name="check" />
-            <span>This is your current name</span>
+        {rows.map((row: any, i: number) => (
+          <li
+            className={`check ${row.idle ? "check--idle" : row.warning ? "check--warn" : row.ok ? "check--ok" : "check--bad"}`}
+            key={i}
+          >
+            <Icon
+              name={
+                row.idle
+                  ? "minus"
+                  : row.warning
+                    ? "warning"
+                    : row.ok
+                      ? "check"
+                      : "x"
+              }
+            />
+            <span>{row.text}</span>
           </li>
-        ) : value ? (
-          result.issues
-            .filter((x: any) => x.message)
-            .map((issue: any, i: number) => (
-              <li
-                className={`check ${issue.warning ? "" : "check--bad"}`}
-                key={i}
-              >
-                <Icon name={issue.warning ? "info" : "x"} />
-                <span>{issue.message}</span>
-              </li>
-            ))
-        ) : (
-          <li className="check">
-            <Icon name="minus" />
-            <span>
-              {kind === "name"
-                ? "An empty name clears your display name."
-                : "Write your text to run the contract’s checks."}
-            </span>
-          </li>
-        )}
-        {value &&
-          !current &&
-          kind !== "name" &&
-          [
-            { codes: ["empty", "too-long"], text: `1–${max} UTF-8 bytes` },
-            {
-              codes: ["control", "utf8"],
-              text: "One line, valid UTF-8, no control characters",
-            },
-            {
-              codes: ["refused"],
-              text: "No hidden or default-ignorable characters",
-            },
-            {
-              codes: ["marker"],
-              text: "No [PLEA or [OBJECTION marker prefixes",
-            },
-          ].map((check) => {
-            const bad = result.issues.some((x: any) =>
-              check.codes.includes(x.code),
-            );
-            return (
-              <li
-                key={check.text}
-                className={`check ${bad ? "check--bad" : "check--ok"}`}
-              >
-                <Icon name={bad ? "x" : "check"} />
-                <span>{check.text}</span>
-              </li>
-            );
-          })}
+        ))}
       </ul>
-      <p className="sr-only" role="status">
-        {current
-          ? "This is your current name"
-          : result.ok
-            ? "Text checks pass"
-            : result.issues.find((x: any) => !x.warning)?.message || ""}
+      <p className="sr-only" aria-live="polite">
+        {announcement}
       </p>
-      {kind === "letter" && result.reads && (
-        <p className="chain-text">{result.reads}</p>
+      {kind === "letter" && value && result.reads && (
+        <Notice title="Reads as:">
+          <p>
+            {result.reads.replace(
+              /\bIMD\b/g,
+              s?.constants.pairSymbol || "imdTEST",
+            )}
+          </p>
+        </Notice>
       )}
     </div>
   );
 }
+
 export const textCheck = (kind: string, text: string) =>
   window.PleaText[
     kind === "name"
@@ -354,6 +515,7 @@ export function AmountInput({
   unit,
   hint,
   aside,
+  invalid = false,
 }: {
   id: string;
   label: string;
@@ -362,6 +524,7 @@ export function AmountInput({
   unit: string;
   hint?: ReactNode;
   aside?: ReactNode;
+  invalid?: boolean;
 }) {
   return (
     <div className="field">
@@ -371,11 +534,14 @@ export function AmountInput({
         </label>
         {aside && <span className="field__aside">{aside}</span>}
       </div>
-      <div className={`input ${!onChange ? "input--readonly" : ""}`}>
+      <div
+        className={`input ${!onChange ? "input--readonly" : ""} ${invalid ? "is-invalid" : ""}`}
+      >
         <input
           className="input__control"
           id={id}
           inputMode="decimal"
+          aria-invalid={invalid || undefined}
           value={value}
           readOnly={!onChange}
           onChange={(e) => onChange?.(e.target.value)}
@@ -385,7 +551,10 @@ export function AmountInput({
         <span className="input__unit">{unit}</span>
       </div>
       {hint && (
-        <p className="field__hint" id={`${id}-hint`}>
+        <p
+          className={`field__hint ${invalid ? "bad-text" : ""}`}
+          id={`${id}-hint`}
+        >
           {hint}
         </p>
       )}
@@ -403,6 +572,14 @@ export function Action({
   done = false,
   confirmed,
   primary = true,
+  variant,
+  sub,
+  connectText,
+  walletLabel = "Confirm in your wallet…",
+  pendingLabel = "Waiting for Sepolia…",
+  block = false,
+  small = false,
+  describedBy,
 }: {
   label: string;
   onRun: () => void;
@@ -414,32 +591,74 @@ export function Action({
   done?: boolean;
   confirmed?: boolean;
   primary?: boolean;
+  variant?: "ink";
+  sub?: ReactNode;
+  connectText?: string;
+  walletLabel?: string;
+  pendingLabel?: string;
+  block?: boolean;
+  small?: boolean;
+  describedBy?: string;
 }) {
   const id = useId();
   const { address, chainId } = useAccount();
   const { r } = useApp();
   const unavailable = !address
-    ? "Connect in the top bar to " + label.toLowerCase() + "."
+    ? connectText ||
+      "Connect in the top bar to " +
+        (/buy/i.test(label)
+          ? "buy"
+          : /plea|appeal/i.test(label)
+            ? "plead"
+            : /object/i.test(label)
+              ? "object"
+              : /claim/i.test(label)
+                ? "send a claim. Any wallet will do: it only pays the gas"
+                : /letter/i.test(label)
+                  ? "send a letter"
+                  : /record/i.test(label)
+                    ? "record points"
+                    : /close/i.test(label)
+                      ? "close the season"
+                      : label.toLowerCase()) +
+        "."
     : chainId !== r.chain.id
       ? "Switch to Sepolia in the top bar."
-      : reason;
+      : reason ||
+        (disabled && !busy && !done && !describedBy
+          ? "Waiting for the required chain state."
+          : undefined);
   return (
     <div className="stack stack--sm">
       <button
         type="button"
-        className={`btn btn--block ${primary ? "btn--primary" : ""}`}
-        disabled={
+        className={`btn ${block ? "btn--block" : ""} ${small ? "btn--sm" : ""} ${variant ? "btn--" + variant : primary ? "btn--primary" : ""}`}
+        aria-disabled={
           disabled || busy || done || !address || chainId !== r.chain.id
         }
         aria-busy={busy}
-        aria-describedby={unavailable || error ? `${id}-note` : undefined}
-        onClick={onRun}
+        aria-describedby={
+          describedBy || (unavailable || error ? `${id}-note` : undefined)
+        }
+        onClick={() => {
+          if (!(disabled || busy || done || !address || chainId !== r.chain.id))
+            onRun();
+        }}
       >
-        {busy
-          ? "Waiting for wallet / confirmation…"
-          : done
-            ? "Confirmed"
-            : label}
+        {busy ? (
+          hash ? (
+            pendingLabel
+          ) : (
+            walletLabel
+          )
+        ) : done ? (
+          "Confirmed"
+        ) : (
+          <>
+            {label}
+            {sub && <span className="btn__sub">{sub}</span>}
+          </>
+        )}
       </button>
       {(unavailable || error) && (
         <p
@@ -474,6 +693,8 @@ export function TxButton({
   disabled,
   reason,
   primary = false,
+  resetKey,
+  small = false,
 }: {
   name: string;
   fn: string;
@@ -482,11 +703,14 @@ export function TxButton({
   disabled?: boolean;
   reason?: ReactNode;
   primary?: boolean;
+  resetKey?: string;
+  small?: boolean;
 }) {
   const tx = useTx(
-    JSON.stringify([name, fn, args], (_, v) =>
-      typeof v === "bigint" ? v.toString() : v,
-    ),
+    resetKey ||
+      JSON.stringify([name, fn, args], (_, v) =>
+        typeof v === "bigint" ? v.toString() : v,
+      ),
   );
   return (
     <Action
@@ -496,6 +720,7 @@ export function TxButton({
       disabled={disabled || !tx.ready}
       reason={reason}
       primary={primary}
+      small={small}
     />
   );
 }
@@ -510,6 +735,10 @@ export function ApprovedAction({
   disabled,
   reason,
   primary = true,
+  variant,
+  sub,
+  prepare,
+  errors,
 }: {
   name: string;
   fn: string;
@@ -521,6 +750,10 @@ export function ApprovedAction({
   disabled?: boolean;
   reason?: ReactNode;
   primary?: boolean;
+  variant?: "ink";
+  sub?: ReactNode;
+  prepare?: () => Promise<any[] | undefined>;
+  errors?: import("./errors").ErrorMap;
 }) {
   const { r, s } = useApp();
   const { address } = useAccount();
@@ -554,6 +787,9 @@ export function ApprovedAction({
           : label
       }
       primary={primary}
+      variant={variant}
+      sub={needs ? undefined : sub}
+      block
       disabled={
         disabled ||
         !tx.ready ||
@@ -581,7 +817,22 @@ export function ApprovedAction({
           if (h) setRevision((n) => n + 1);
         } else {
           setLastWasApproval(false);
-          await tx.send(name, fn, args);
+          await tx.send(name, fn, args, undefined, {
+            errors,
+            prepare: prepare
+              ? async () => {
+                  const fresh = await prepare();
+                  return {
+                    to: r.addresses[name],
+                    data: encodeFunctionData({
+                      abi: r.abis[name],
+                      functionName: fn,
+                      args: fresh || args,
+                    }),
+                  };
+                }
+              : undefined,
+          });
         }
       }}
     />
@@ -627,8 +878,10 @@ export function Stamp({
             ? p.failure
               ? p.failure.status === 1
                 ? "request refused"
-                : `panel split ${p.failure.agreed}/${p.failure.answered}`
-              : "no panel verdict"
+                : !p.failure.answered
+                  ? "no answer"
+                  : `panel split ${p.failure.agreed}/${p.failure.answered}`
+              : "no answer"
             : `${p.score} vs need ${p.need}`}
       </span>
     </span>
@@ -643,68 +896,120 @@ export function ObjectionStamps({ p }: { p: Plea }) {
             {["", "OBJECTION", "SUSTAINED", "OVERRULED", "VOID"][o.ruling]}
             {o.ruling === 1 ? ` #${o.id}` : ""}
           </span>
-          <span>
-            {o.ruling === 1
-              ? "pending"
-              : `#${o.id}: ${o.newScore} vs need ${p.need}`}
-          </span>
+          <span>{objectionLine(o, p)}</span>
         </p>
       ))}
     </>
   );
 }
 export function PleaCard({ p, detail = false }: { p: Plea; detail?: boolean }) {
-  const { s, now } = useApp();
-  const { address } = useAccount();
+  const { s, now } = useApp(),
+    { address } = useAccount(),
+    prefix = useId(),
+    state = pleaState(p, now, s!),
+    earns = [2, 4, 5].includes(p.status) && !p.excluded && !p.standing?.[1];
+  const pts = earns
+      ? `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}`
+      : "no points",
+    window = Number(con(s, "CabalGate.EXECUTE_WINDOW")),
+    appeal = s?.logs.find(
+      (l) => l.eventName === "PleaSubmitted" && l.args.originalId === p.id,
+    )?.args.id;
+  const nums = (
+    <>
+      {state === "PENDING" ? (
+        <>
+          <span>{tokenAmount(p.amount, s)}</span>
+          <span>need {p.need}</span>
+          <span>
+            expires{" "}
+            {clock(
+              Number(p.submittedAt) +
+                Number(con(s, "CabalGate.PENDING_EXPIRY")),
+            )}
+          </span>
+        </>
+      ) : state === "NO VERDICT" ? (
+        <>
+          <span>no points</span>
+          <span>no cooldown</span>
+        </>
+      ) : p.status === 3 ? (
+        <>
+          <span>no points</span>
+          <span>
+            {p.isAppeal ? (
+              "no further appeal"
+            ) : appeal ? (
+              <span>appealed in #{String(appeal)}</span>
+            ) : p.appealed ? (
+              "appealed"
+            ) : (
+              `appeal until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}`
+            )}
+          </span>
+        </>
+      ) : (
+        <>
+          <span>{pts}</span>
+          {state === "APPROVED" ||
+          (state === "OVERTURNED" && p.status === 2) ? (
+            <span>sell by {clock(Number(p.verdictAt) + window)}</span>
+          ) : state === "LAPSED" ? (
+            <span>not sold in {window / 60} min</span>
+          ) : p.status === 4 ? (
+            <span>sold for {tokenAmount(soldFor(p, s!), s, true)}</span>
+          ) : null}
+        </>
+      )}
+    </>
+  );
   const content = (
     <>
       <div className="wall-card__top">
-        <Stamp p={p} large={detail} />
-        <span className="wall-card__id">
-          Plea #{String(p.id)} · sent {duration(now - Number(p.submittedAt))}{" "}
-          ago
+        <span id={`${prefix}-stamp`}>
+          <Stamp p={p} large={detail} />
+        </span>
+        <span className="wall-card__id" id={`${prefix}-id`}>
+          <span className="sr-only">Plea </span>#{String(p.id)}{" "}
+          <span id={`${prefix}-age`}>· {ago(now - Number(p.submittedAt))}</span>
         </span>
       </div>
       <p
         className={detail ? "plea__text plea__text--detail" : "wall-card__text"}
+        id={`${prefix}-text`}
       >
         “{p.text}”
       </p>
-      <ObjectionStamps p={p} />
-      <div className="wall-card__nums">
-        <span>
-          <b>{tokenAmount(p.amount, s)}</b>
+      {detail && (
+        <>
+          <FactCells parts={p.facts} total={p.factScore} />
+          <Meter
+            fact={p.factScore}
+            need={p.need}
+            score={p.score}
+            verdict={state}
+          />
+        </>
+      )}
+      <div id={`${prefix}-objections`}>
+        <ObjectionStamps p={p} />
+      </div>
+      <div className="wall-card__nums" id={`${prefix}-nums`}>
+        {nums}
+      </div>
+      <div className="wall-card__who" id={`${prefix}-who`}>
+        <span className={`${p.name ? "" : "mono "}strong`}>
+          {p.name || short(p.seller)}
         </span>
-        <span>
-          {[2, 4, 5].includes(p.status)
-            ? p.standing?.[1] || p.excluded
-              ? "no points"
-              : `+${p.points} points ${p.recorded ? "recorded" : p.standing?.[0] ? "held" : "once recorded"}`
-            : p.status === 1
-              ? "no points yet"
-              : "no points"}
-        </span>
-        {p.status === 4 && (
-          <span>
-            Sold for{" "}
-            {tokenAmount(
-              p.escrow?.[3] ||
-                s?.logs.find(
-                  (l) => l.eventName === "SellExecuted" && l.args.id === p.id,
-                )?.args.imdOut,
-              s,
-              true,
-            )}
+        {p.seat && <span className="badge badge--seat">SEAT ×1.2</span>}
+        {!!(p.flags & 1) && (
+          <span className="badge badge--letter">
+            <Icon name="envelope-simple" />
+            BY LETTER
           </span>
         )}
-      </div>
-      <div className="wall-card__who">
-        <span className="strong">{p.name || short(p.seller)}</span>
-        {p.seat && <span className="badge badge--seat">SEAT ×1.2</span>}
-        {(p.flags & 1) > 0 && (
-          <span className="badge badge--letter">BY LETTER</span>
-        )}
-        {(p.flags & 2) > 0 && (
+        {!!(p.flags & 2) && !(p.flags & 1) && (
           <span className="badge badge--auto">AUTO-SELL</span>
         )}
         {p.isAppeal && (
@@ -717,47 +1022,216 @@ export function PleaCard({ p, detail = false }: { p: Plea; detail?: boolean }) {
     </>
   );
   return detail ? (
-    <article className="card plea stack">{content}</article>
-  ) : (
-    <a className="wall-card" href={`#/p/${p.id}`}>
+    <article className="card plea stack">
       {content}
-    </a>
+      <p className="plea__summary">
+        {p.status === 4
+          ? `Sold ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`
+          : `Sells ${tokenAmount(p.amount, s)}`}{" "}
+        · {pts}
+      </p>
+    </article>
+  ) : (
+    <article className="wall-card linked-card">
+      <a
+        className="linked-card__link"
+        href={`#/p/${p.id}`}
+        aria-labelledby={`${prefix}-id ${prefix}-stamp`}
+        aria-describedby={`${prefix}-age ${prefix}-text ${prefix}-objections ${prefix}-nums ${prefix}-who`}
+      />
+      {content}
+    </article>
+  );
+}
+export function HeroPlea({ p }: { p: Plea }) {
+  const { s, now } = useApp(),
+    { address } = useAccount(),
+    state = pleaState(p, now, s!),
+    mine = address?.toLowerCase() === p.seller.toLowerCase(),
+    sell = Number(p.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")),
+    objection =
+      Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW"));
+  return (
+    <article className="card plea stack">
+      <p className="label">{p.verdictAt ? "Latest verdict" : "Latest plea"}</p>
+      <div className="plea__head">
+        <h2 className="plea__id">Plea #{String(p.id)}</h2>
+        <span className="meta">
+          by{" "}
+          <span className={!p.name ? "mono" : ""}>
+            {p.name || short(p.seller)}
+          </span>
+        </span>
+        {p.seat && (
+          <span className="badge badge--seat">
+            <Icon name="armchair" />
+            SEAT ×1.2
+          </span>
+        )}
+        {mine && <span className="badge badge--you">YOU</span>}
+        <span className="plea__time">
+          {p.verdictAt ? state.toLowerCase() : "sent"}{" "}
+          {ago(now - Number(p.verdictAt || p.submittedAt))}
+        </span>
+      </div>
+      <div className="hero-stamp">
+        <Stamp p={p} large />
+      </div>
+      <p className="plea__text">“{p.text}”</p>
+      {p.facts && <FactCells parts={p.facts} total={p.factScore} />}
+      <Meter fact={p.factScore} need={p.need} score={p.score} verdict={state} />
+      <p className="plea__summary">
+        {p.status === 4
+          ? `Sold ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`
+          : `Sells ${tokenAmount(p.amount, s)}`}{" "}
+        ·{" "}
+        {p.excluded || p.standing?.[1]
+          ? "no points"
+          : `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}${p.seat ? ` (${p.score} × 1.2)` : ""}`}
+      </p>
+      <div className="plea__actions">
+        {p.status === 2 && now <= sell && (
+          <Countdown
+            until={sell}
+            label={mine ? "Sell within" : "Seller’s window"}
+            urgent={mine}
+          />
+        )}{" "}
+        {p.standing?.[0] && now <= objection && (
+          <Countdown until={objection} label="Objections close in" />
+        )}
+        {state === "PENDING" && (
+          <Countdown
+            until={
+              Number(p.submittedAt) + Number(con(s, "CabalGate.PENDING_EXPIRY"))
+            }
+            label="Waiting for the Cabal"
+            wait
+          />
+        )}
+      </div>
+      <a className="link-btn" href={`#/p/${p.id}`}>
+        Open plea #{String(p.id)} <Icon name="arrow-right" />
+      </a>
+    </article>
   );
 }
 export function Meter({
   fact,
   need,
   score = 0,
+  verdict,
+  label,
 }: {
   fact: number;
   need: number;
   score?: number;
+  verdict?: string;
+  label?: string;
 }) {
-  const { s } = useApp();
+  const { s } = useApp(),
+    max = Number(con(s, "CabalGate.MAX_PLEA_SCORE") || 45),
+    pass = Number(con(s, "CabalGate.PASS_MARK") || 71);
+  if (need > max)
+    return (
+      <p className="small">
+        Need {need} = {pass} − fact {fact}, above the {max} a plea can score.
+      </p>
+    );
+  const judged = !!verdict && !["PENDING", "NO VERDICT"].includes(verdict),
+    denied = verdict === "DENIED" || verdict === "UPHELD",
+    difference = denied ? `${need - score} short` : `passes by ${score - need}`;
   return (
     <div
-      className={`meter ${!score ? "meter--none" : ""}`}
-      style={{ "--score": score, "--need": need } as CSSProperties}
+      className={`meter ${!judged ? "meter--none" : denied ? "meter--denied" : ""}`}
+      style={
+        {
+          "--score": Math.max(0, Math.min(max, score)),
+          "--need": Math.max(0, Math.min(max, need)),
+        } as CSSProperties
+      }
     >
       <div className="meter__legend">
-        <span>{score ? `Judges ${score}` : "No score yet"}</span>
         <span>
-          Need <b>{need}</b> = {String(con(s, "CabalGate.PASS_MARK"))} − fact{" "}
-          <b>{fact}</b>
+          {judged
+            ? `Judges ${score}`
+            : verdict === "PENDING"
+              ? "Waiting for the judges"
+              : "No score yet"}
         </span>
+        <span>
+          Need <b>{need}</b> = {pass} − fact <b>{fact}</b>
+        </span>
+        {judged && (
+          <span className={denied ? "bad-text" : "ok-text"}>{difference}</span>
+        )}
       </div>
       <div
         className="meter__bar"
         role="img"
-        aria-label={`Score ${score}, need ${need} of ${con(s, "CabalGate.MAX_PLEA_SCORE")}`}
+        aria-label={
+          label ||
+          (judged
+            ? `Score ${score} of ${max}, need ${need}: ${difference}`
+            : `No score yet. Your need is ${need} of ${max}.`)
+        }
       >
         <span className="meter__fill" />
         <span className="meter__need" />
       </div>
       <div className="meter__scale" aria-hidden="true">
         <span>0</span>
-        <span>{String(con(s, "CabalGate.MAX_PLEA_SCORE"))}</span>
+        <span>{max}</span>
       </div>
     </div>
+  );
+}
+export function FactCells({
+  parts,
+  total,
+}: {
+  parts?: {
+    share: number;
+    held: number;
+    profit: number;
+    trend: number;
+    total: number;
+    uncovered: bigint;
+    weighted: number;
+  };
+  total: number;
+}) {
+  if (!parts)
+    return <p className="small">Fact score {total}, read from the chain.</p>;
+  const rows =
+    parts.total === total && !parts.uncovered
+      ? [
+          ["Share sold", parts.share],
+          ["Held", parts.held],
+          ["Profit or loss", parts.profit],
+          ["24h trend", parts.trend],
+        ]
+      : [
+          ["Share sold", parts.share],
+          ["Held, profit and trend", total - parts.share],
+        ];
+  return (
+    <>
+      <div className="facts">
+        {rows.map(([label, points]) => (
+          <div className="fact" key={label}>
+            <span className="fact__label">{label}</span>
+            <b className="fact__value">+{points}</b>
+          </div>
+        ))}
+      </div>
+      {parts.uncovered > 0n && (
+        <p className="small">
+          {amount(parts.uncovered)} PLEA have no buy record: they count as held
+          since trading opened, profit 10. Holding and profit use the
+          PLEA-weighted mean.
+        </p>
+      )}
+    </>
   );
 }

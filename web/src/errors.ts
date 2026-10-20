@@ -2,9 +2,82 @@ import {
   BaseError,
   ContractFunctionRevertedError,
   decodeErrorResult,
+  parseAbi,
   type Abi,
 } from "viem";
-const messages: Record<string, string> = {
+export const messages: Record<string, string> = {
+  AlreadyBegun: "Trading has already begun. Refresh the market.",
+  AlreadyConsumed: "This verdict was already used. Refresh the plea.",
+  AlreadySet: "This setting is already configured.",
+  AttestationExpired: "This signed verdict expired. Request a current verdict.",
+  AttestationNotYetValid:
+    "This verdict is not valid yet. Wait for its start time.",
+  BadFlags: "This plea mode is not supported. Refresh the page.",
+  BadSignature: "The panel signature could not be verified. Nothing was paid.",
+  BelowAgreedMarketCap: "The pool must open at the agreed market cap.",
+  BelowAgreedTiming: "The opening time cannot precede the agreed start.",
+  CallbackNotExpected: "The pool callback was not expected. Refresh and retry.",
+  ERC20InvalidApprover: "The token cannot approve this wallet.",
+  ERC20InvalidReceiver: "The token cannot be sent to that recipient.",
+  ERC20InvalidSender: "The token cannot be sent from that wallet.",
+  ERC20InvalidSpender: "This token spender is not valid.",
+  HookAlreadyDeployed: "The pool hook is already deployed.",
+  HookDeployFailed:
+    "The pool hook deployment failed. The launch owner must check setup.",
+  InitializationRestrictedToHook:
+    "Only the launch hook can initialize this pool.",
+  InvalidLiquidity: "This liquidity amount is not valid. Lower the amount.",
+  InvalidPool: "This pool does not match the launch. Refresh the deployment.",
+  InvalidShortString: "This text cannot be encoded. Shorten it.",
+  LetterboxAlreadyDeployed: "The Letterbox is already deployed.",
+  LetterboxDeployFailed:
+    "The Letterbox deployment failed. The launch owner must check setup.",
+  LiquidityRestrictedToHook:
+    "Only the launch hook can manage this pool liquidity.",
+  MintOnMainnet: "Oracle fee minting is unavailable on this chain.",
+  MintWithPoolImd: "Oracle fees must be bought using the configured fee token.",
+  NotDeployTx: "This setup action is only available during deployment.",
+  NotIntake: "Only the oracle Intake can call this action.",
+  NotLetterbox: "Only the Letterbox can submit this escrowed plea.",
+  NotPoolManager: "Only the pool manager can call this action.",
+  NotTribunal: "Only the Tribunal can update these points.",
+  OracleAssetMismatch: "The oracle fee token does not match the launch.",
+  OracleAssetNotImd: "The oracle fee token is not supported.",
+  OwnableInvalidOwner: "This owner address cannot be used.",
+  ReentrancyGuardReentrantCall:
+    "Another contract action is still in progress. Retry after it ends.",
+  RootAlreadySet: "The claim list root is final and cannot change.",
+  SafeCastOverflowedUintDowncast:
+    "This amount exceeds the contract limit. Lower it.",
+  ScoreOutOfRange: "The score is outside the judges\u2019 permitted range.",
+  StringTooLong: "The text is too long. Shorten it.",
+  StringsInsufficientHexLength:
+    "This identifier cannot be encoded. Refresh it.",
+  TooLate: "The deadline has passed. Refresh to see the next action.",
+  TribunalAlreadyDeployed: "The Tribunal is already deployed.",
+  TribunalDeployFailed:
+    "The Tribunal deployment failed. The launch owner must check setup.",
+  TribunalOff: "Objections are not configured for this launch.",
+  UnexpectedLiquidityDelta:
+    "The pool could not supply the expected liquidity. Lower the amount.",
+  UnfundedStake:
+    "The objection stake has not reached Seasons. Retry settlement.",
+  UnknownRequest: "This oracle request is unknown. Check its plea number.",
+  WrongAnswerType:
+    "The oracle answer has the wrong format. No verdict was applied.",
+  WrongFlags: "The pool hook flags do not match the launch.",
+  WrongInitCode: "This contract build does not match the committed launch.",
+  WrongPanel: "This verdict came from the wrong oracle panel.",
+  ZeroAddress: "A required address is missing. Check the recipient.",
+  ZeroRoot: "The claim list has not been configured.",
+  ZeroSigner: "The oracle signer is not configured.",
+  ZeroTiming: "The launch timing is not configured.",
+  PriceLimitAlreadyExceeded:
+    "The price moved past your limit. Nothing was bought; refresh the quote or raise slippage.",
+  PriceLimitOutOfBounds:
+    "This price limit is outside the pool range. Lower the amount.",
+  PoolNotInitialized: "Trading is not open yet. Wait for the seed.",
+  SwapAmountCannotBeZero: "Enter an amount greater than zero.",
   ERC20InsufficientAllowance:
     "The token approval is too small. Approve the amount shown, then try again.",
   ERC20InsufficientBalance:
@@ -60,7 +133,7 @@ const messages: Record<string, string> = {
     "Your cooldown is still running. Wait until the time shown before sending another plea.",
   CabalNotWatching:
     "The Cabal is not taking pleas. Check whether trading has opened or the Cabal has died.",
-  NotSeeded: "Trading is not open yet. Anyone may seed from the opening time.",
+  NotSeeded: "Trading is not open yet. Wait until the pool is seeded.",
   PendingExists: "You already have an open plea. Open its status page first.",
   BadPleaText:
     "Your plea contains refused text. Fix the checks under the text box.",
@@ -74,7 +147,7 @@ const messages: Record<string, string> = {
   LetterTooSmall:
     "The letter amount is too small. You need more PLEA to send a letter.",
   FeeTooHigh:
-    "The fee would take too much PLEA. Try a larger eligible sale or wait for the snapshot price to improve.",
+    "The price fell since the hourly snapshot, so the fee needs more PLEA than its 10% margin. Nothing was paid; try again after the next snapshot or untick auto-sell.",
   TooSmallForTheFee:
     "The sale is too small to cover its fees. Increase the amount.",
   SlippageExceeded:
@@ -117,36 +190,69 @@ const messages: Record<string, string> = {
   CabalIsWatching: "While the Cabal lives, sell through an approved plea.",
   TooEarly: "Trading is not open yet. Wait until the start time shown.",
 };
-export function explainError(e: any, abis: Abi[] = []): string {
-  if (e?.code === 4001 || /user rejected|user denied/i.test(e?.message || ""))
-    return "You declined the wallet request. Nothing was sent; try again when ready.";
+const poolErrors = parseAbi([
+  "error WrappedError(address target,bytes4 selector,bytes reason,bytes details)",
+  "error PriceLimitAlreadyExceeded(uint160 sqrtPriceCurrentX96,uint160 sqrtPriceLimitX96)",
+  "error PriceLimitOutOfBounds(uint160 sqrtPriceLimitX96)",
+  "error PoolNotInitialized()",
+  "error SwapAmountCannotBeZero()",
+]);
+export function decodeCustomError(
+  e: any,
+  abis: Abi[] = [],
+): { name: string; args?: any } | undefined {
+  const seen = new Set<any>();
+  function decode(data: any, depth = 0): any {
+    if (depth > 8 || typeof data !== "string" || !data.startsWith("0x")) return;
+    for (const abi of [poolErrors, ...abis])
+      try {
+        const result = decodeErrorResult({ abi, data: data as `0x${string}` });
+        if (result.errorName === "WrappedError")
+          return (
+            decode(result.args?.[2], depth + 1) ||
+            decode(result.args?.[3], depth + 1)
+          );
+        return { name: result.errorName, args: result.args };
+      } catch {}
+  }
+  let node = e;
+  for (let i = 0; i < 16 && node && !seen.has(node); i++) {
+    seen.add(node);
+    if (node.data?.errorName)
+      return { name: node.data.errorName, args: node.data.args };
+    const decoded =
+      decode(typeof node.data === "string" ? node.data : node.data?.data) ||
+      decode(node.error?.data);
+    if (decoded) return decoded;
+    node = node.cause || node.error;
+  }
+}
+export function explainReadError(e: any) {
   if (
-    /Connect in the top bar|Switch to Sepolia in the top bar/.test(
-      e?.message || "",
-    )
+    e?.constructor === Error &&
+    !/fetch|network|HTTP|timeout|RPC/i.test(e.message)
   )
     return e.message;
-  let name = e?.data?.errorName;
-  if (e instanceof BaseError) {
-    const r = e.walk(
-      (x) => x instanceof ContractFunctionRevertedError,
-    ) as ContractFunctionRevertedError;
-    name = r?.data?.errorName || name;
-  }
-  const seen = new Set();
-  let node = e;
-  for (let i = 0; i < 8 && node && !seen.has(node); i++) {
-    seen.add(node);
-    const data = typeof node.data === "string" ? node.data : node.data?.data;
-    if (data?.startsWith("0x"))
-      for (const abi of abis)
-        try {
-          name = decodeErrorResult({ abi, data }).errorName;
-        } catch {}
-    node = node.cause;
-  }
-  if (name && messages[name]) return messages[name];
+  return "The public RPC did not answer. The site tries the next one by itself; your funds are not affected.";
+}
+export type ErrorMap = Record<string, string | ((args: any) => string)>;
+export function explainError(
+  e: any,
+  abis: Abi[] = [],
+  overrides: ErrorMap = {},
+): string {
+  if (e?.code === 4001 || /user rejected|user denied/i.test(e?.message || ""))
+    return "You declined the wallet request. Nothing was sent; try again when ready.";
+  const decoded = decodeCustomError(e, abis);
+  const override = decoded && overrides[decoded.name];
+  if (decoded)
+    return (
+      (typeof override === "function" ? override(decoded.args) : override) ||
+      messages[decoded.name] ||
+      `The contract refused this action (${decoded.name}). Refresh its state before retrying.`
+    );
   if (/insufficient funds/i.test(e?.message || ""))
     return "You need Sepolia ETH for gas and enough tokens for this action. Add test funds and try again.";
-  return "The request could not complete. Refresh the chain data, check your wallet is on Sepolia, and try again. Nothing is confirmed until a receipt appears.";
+  if (e?.constructor === Error) return e.message;
+  return "The transaction could not be simulated. Refresh the chain data and try again. Nothing was sent.";
 }

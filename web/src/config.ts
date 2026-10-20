@@ -1,7 +1,7 @@
 import {
   createPublicClient,
   defineChain,
-  fallback,
+  custom,
   http,
   keccak256,
   toHex,
@@ -10,8 +10,10 @@ import {
   type Address,
 } from "viem";
 import { createConfig } from "wagmi";
-import { injected, coinbaseWallet } from "wagmi/connectors";
+import { injected } from "wagmi/connectors";
+import expectedAbi from "./abi-hashes.json";
 export const APP = {
+  expectedAbi,
   eventStart: 11948819n,
   oracleApi: "https://api.imd.fun",
   claimsPath: "claims.json",
@@ -29,6 +31,9 @@ export const erc20Abi = parseAbi([
   "function balanceOf(address) view returns(uint256)",
   "function allowance(address,address) view returns(uint256)",
   "function approve(address,uint256) returns(bool)",
+]);
+export const intakeAbi = parseAbi([
+  "function requests(bytes32) view returns(address payer,address callbackTarget,bytes4 callbackSelector,bool completed)",
 ]);
 export const claimsAbi = parseAbi([
   "function balanceOf(address,uint256) view returns(uint256)",
@@ -71,15 +76,19 @@ export async function loadConfig() {
     rpcUrls: { default: { http: n.rpcUrls } },
     blockExplorers: { default: { name: "Etherscan", url: n.explorer } },
     testnet: n.testnet,
+    contracts: {
+      multicall3: {
+        address: "0xcA11bde05977b3631167028862bE2a173976CA11",
+        blockCreated: 751532,
+      },
+    },
   });
-  const transport = () =>
-    fallback(
-      n.rpcUrls.map((url: string) =>
-        http(url, { timeout: 12000, retryCount: 1, batch: { wait: 20 } }),
-      ),
-      { rank: false, retryCount: 1 },
-    );
-  const client = createPublicClient({ chain, transport: transport() });
+  const transport = resilientTransport(n.rpcUrls);
+  const client = createPublicClient({
+    chain,
+    transport,
+    batch: { multicall: { wait: 16 } },
+  });
   const abis: Record<string, Abi> = {};
   const addresses: Record<string, Address> = {};
   await Promise.all(
@@ -94,9 +103,9 @@ export async function loadConfig() {
       if (!r.ok) throw Error(`Cannot load ${name}'s interface.`);
       const abi = await r.json();
       if (
-        entry &&
         keccak256(toHex(JSON.stringify(canonical(abi)))).slice(2) !==
-          entry.abiHash
+        (entry?.abiHash ||
+          APP.expectedAbi[name as keyof typeof APP.expectedAbi])
       )
         throw Error(`${name}'s interface does not match the deployment.`);
       abis[name] = abi;
@@ -106,11 +115,8 @@ export async function loadConfig() {
   const walletConfig = createConfig({
     chains: [chain],
     multiInjectedProviderDiscovery: true,
-    connectors: [
-      injected(),
-      coinbaseWallet({ appName: "PLEA", preference: "all" }),
-    ],
-    transports: { [chain.id]: transport() },
+    connectors: [injected()],
+    transports: { [chain.id]: transport },
   });
   return { manifest, network: n, chain, client, abis, addresses, walletConfig };
 }
@@ -159,4 +165,61 @@ export async function discover(r: Runtime) {
     }),
   );
   return r;
+}
+
+/** Shared endpoint health: failures cool down once; JSON-RPC reverts remain request errors. */
+export function resilientTransport(
+  urls: string[],
+  timeout = 6000,
+  cooldown = 60000,
+) {
+  const endpoints = urls.map((url) => ({
+    transport: http(url, {
+      timeout,
+      retryCount: 0,
+      batch: { batchSize: 5, wait: 16 },
+    })({}),
+    down: 0,
+  }));
+  return custom(
+    {
+      async request(args: any) {
+        let last: any;
+        for (const endpoint of endpoints) {
+          if (endpoint.down > Date.now()) continue;
+          try {
+            return await endpoint.transport.request(args);
+          } catch (e: any) {
+            const text = [
+              e?.shortMessage,
+              e?.message,
+              e?.details,
+              e?.cause?.details,
+              e?.body,
+            ].join(" ");
+            const status = e?.status || e?.cause?.status;
+            if (
+              /execution reverted|revert data|limited to \d+ blocks|block range|query returned|too many results/i.test(
+                text,
+              ) ||
+              (e?.code &&
+                e.code !== -1 &&
+                !/HTTP|fetch|network|timeout/i.test(text))
+            )
+              throw e;
+            if (status && status !== 429 && status < 500) throw e;
+            endpoint.down = Date.now() + cooldown;
+            last = e;
+          }
+        }
+        throw (
+          last ||
+          Error(
+            "The public RPC did not answer. The site tries the next one by itself; your funds are not affected.",
+          )
+        );
+      },
+    },
+    { retryCount: 0 },
+  );
 }

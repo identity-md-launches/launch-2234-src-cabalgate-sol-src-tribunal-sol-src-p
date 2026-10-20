@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAccount, useConnect, useDisconnect } from "wagmi";
-import { short } from "./chain";
-import { useApp } from "./context";
+import { short, read } from "./chain";
+import { useApp, useRead } from "./context";
 import { explainError } from "./errors";
 const OPEN = [
   {
@@ -31,10 +31,21 @@ const OPEN = [
   },
 ];
 export function Wallet() {
-  const { r, toast } = useApp();
+  const { r, s, toast } = useApp();
   const { address, chainId, connector } = useAccount();
   const { connectors, connectAsync, isPending, variables } = useConnect();
   const { disconnect } = useDisconnect();
+  const info = useRead(
+    async () => {
+      const [name, seat] = await Promise.all([
+        read(r, "Letterbox", "nameOf", [address]),
+        read(r, "Seasons", "holdsSeat", [address]),
+      ]);
+      return { name, seat };
+    },
+    [address],
+    !!address && !!s,
+  );
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState("");
@@ -90,26 +101,36 @@ export function Wallet() {
   );
   return (
     <>
-      <button
-        ref={trigger}
-        className={`wallet-btn ${!address ? "wallet-btn--connect" : ""}`}
-        onClick={() =>
-          address && chainId !== r.chain.id
-            ? switchChain()
-            : dialog.current?.showModal()
-        }
-        disabled={switching}
-      >
-        <span className="wallet-btn__name">
-          {switching
-            ? "Switching…"
-            : address
-              ? chainId !== r.chain.id
-                ? "Switch to Sepolia"
-                : short(address)
-              : "Connect"}
-        </span>
-      </button>
+      {address && chainId === r.chain.id ? (
+        <a className="wallet-btn" href="#/profile">
+          {info.data?.seat && <span className="seat-dot" aria-hidden="true" />}
+          {info.data?.name || short(address)}
+          <span className="sr-only">
+            : your profile{info.data?.seat ? " (holds an IMD seat)" : ""}
+          </span>
+        </a>
+      ) : (
+        <button
+          ref={trigger}
+          className={`wallet-btn ${!address || chainId !== r.chain.id ? "wallet-btn--connect" : ""}`}
+          onClick={() =>
+            address && chainId !== r.chain.id
+              ? switchChain()
+              : dialog.current?.showModal()
+          }
+          disabled={switching}
+        >
+          <span className="wallet-btn__name">
+            {switching
+              ? "Switching…"
+              : address
+                ? chainId !== r.chain.id
+                  ? "Switch to Sepolia"
+                  : short(address)
+                : "Connect"}
+          </span>
+        </button>
+      )}
       <dialog
         ref={dialog}
         className="wallet-sheet"
@@ -129,7 +150,9 @@ export function Wallet() {
               aria-label="Close wallet menu"
               onClick={() => dialog.current?.close()}
             >
-              ×
+              <svg className="icon" aria-hidden="true">
+                <use href="#i-x" />
+              </svg>
             </button>
           </div>
           {address ? (
@@ -185,21 +208,12 @@ export function Wallet() {
                   }}
                 >
                   <img
-                    src={
-                      c.icon ||
-                      `./wallets/${c.id === "coinbaseWalletSDK" ? "coinbase" : "metaMask"}.svg`
-                    }
+                    src={c.icon || "./wallets/metaMask.svg"}
                     width="28"
                     height="28"
                     alt=""
                   />
-                  {c.id === "injected"
-                    ? "Browser wallet"
-                    : c.id === "coinbaseWalletSDK"
-                      ? mobile
-                        ? "Coinbase Smart Wallet"
-                        : "Coinbase Wallet"
-                      : c.name}
+                  {c.id === "injected" ? "Browser wallet" : c.name}
                   {isPending && (variables?.connector as any)?.uid === c.uid
                     ? " · opening…"
                     : ""}

@@ -52,6 +52,12 @@ for (const [i, c] of m.contracts.entries()) {
     c.abiHash,
   );
 }
+const discoveredAbi = JSON.parse(fs.readFileSync("web/src/abi-hashes.json"));
+for (const [name, hash] of Object.entries(discoveredAbi)) {
+  const abi = JSON.parse(fs.readFileSync(path.join(root, `abi/${name}.json`)));
+  assert.ok(Array.isArray(abi));
+  assert.equal(keccak256(toHex(JSON.stringify(canonical(abi)))).slice(2), hash);
+}
 const files = [];
 function walk(p = "") {
   for (const f of fs.readdirSync(path.join(root, p), { withFileTypes: true })) {
@@ -82,5 +88,5 @@ const og = fs.readFileSync(path.join(root, "og.png"));
 assert.equal(og.readUInt32BE(16), 1200);
 assert.equal(og.readUInt32BE(20), 675);
 console.log(
-  `Export verified: ${files.length} assets, ${bytes} bytes; exact handoff/network and five canonical ABI hashes match.`,
+  `Export verified: ${files.length} assets, ${bytes} bytes; exact handoff/network and all eight canonical ABI hashes match.`,
 );

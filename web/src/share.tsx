@@ -1,10 +1,44 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { toBlob } from "html-to-image";
+import { useAccount } from "wagmi";
 import { useApp, useRead } from "./context";
-import { amount, con, getPlea, short, tokenAmount, type Plea } from "./chain";
+import {
+  amount,
+  read,
+  con,
+  getPlea,
+  short,
+  tokenAmount,
+  pleaState,
+  objectionLine,
+  clock,
+  soldFor,
+  seasonState,
+  type Plea,
+} from "./chain";
 import { Empty, Icon, Panel, Stamp, Title } from "./components";
 export function ShareCard({ p }: { p?: Plea }) {
-  const { s, r } = useApp();
+  const { s, r, now } = useApp();
+  const extra = useRead(
+    async () => {
+      if (!p || !p.verdictAt) return undefined;
+      const season =
+          (p.verdictAt - BigInt(s!.v["CabalGate.startedAt"])) /
+          BigInt(con(s, "Seasons.SEASON")),
+        top = await read(r, "Seasons", "topOf", [season]),
+        original = p.isAppeal
+          ? await read(r, "CabalGate", "getPlea", [p.originalId])
+          : undefined;
+      return {
+        season,
+        rank: top.findIndex(
+          (e: any) => e.wallet.toLowerCase() === p.seller.toLowerCase(),
+        ),
+        original,
+      };
+    },
+    [p?.id.toString()],
+    !!p && !!s && !!p.verdictAt,
+  );
   const earnsPoints =
     !!p && [2, 4, 5].includes(p.status) && !p.excluded && !p.standing?.[1];
   const frame = useRef<HTMLDivElement>(null);
@@ -40,23 +74,59 @@ export function ShareCard({ p }: { p?: Plea }) {
     p?.objections?.find((o) => o.ruling === 1) ||
     p?.objections?.at(-1);
   const sold = p?.status === 4;
+  const latestObjection =
+    p?.objections?.find((o) => o.ruling === 2) ||
+    p?.objections?.find((o) => o.ruling === 1) ||
+    p?.objections?.at(-1);
+  const state =
+    latestObjection && [1, 2, 3].includes(latestObjection.ruling)
+      ? (
+          { 1: "OBJECTION", 2: "SUSTAINED", 3: "OVERRULED" } as Record<
+            number,
+            string
+          >
+        )[latestObjection.ruling]
+      : p && s
+        ? pleaState(p, now, s)
+        : "";
+  const cardUrl = location.host + location.pathname + (p ? `#/p/${p.id}` : "");
   const dead = !!s?.v["CabalGate.diedAt"];
   return (
-    <div className="share-frame" ref={frame}>
+    <div
+      className="share-frame"
+      ref={frame}
+      role="img"
+      aria-label={
+        p
+          ? `Plea ${p.id}, ${state}, ${p.score} vs need ${p.need}, ${p.points || 0} points. ${cardUrl}`
+          : "PLEA: buying is open, selling needs a plea."
+      }
+    >
       <article
-        className={`share-card ${p ? "share-card--wide-stamp" : ""}`}
+        className={`share-card ${["NO VERDICT", "OVERTURNED"].includes(state) ? "share-card--wide-stamp" : ""}`}
         aria-label={p ? `Share card for plea ${p.id}` : "PLEA link card"}
       >
         <div className="share-card__top">
           <span className="logo">PLEA</span>
           {p && (
             <span className="share-card__who">
-              {p.name || short(p.seller)}
+              <span className={!p.name ? "mono" : ""}>
+                {p.name || short(p.seller)}
+              </span>
+              {!!(p.flags & 1) && (
+                <span className="badge badge--letter">
+                  <Icon name="envelope-simple" />
+                  BY LETTER
+                </span>
+              )}
+              {p.isAppeal && (
+                <span className="badge">APPEAL OF #{String(p.originalId)}</span>
+              )}
               {p.seat && <span className="badge badge--seat">SEAT ×1.2</span>}
             </span>
           )}
-          <span className="share-card__id">
-            {p ? `#${p.id}` : "Sepolia · run 9"}
+          <span className={p ? "share-card__id" : ""}>
+            {p ? `Plea #${p.id}` : "The Cabal is in session."}
           </span>
         </div>
         {p ? (
@@ -77,85 +147,217 @@ export function ShareCard({ p }: { p?: Plea }) {
                           objection.ruling
                         ]}
                   </span>
-                  <span>
-                    {objection.ruling === 1
-                      ? "pending"
-                      : `#${objection.id}: ${objection.newScore} vs need ${p.need}`}
-                  </span>
+                  <span>{objectionLine(objection, p)}</span>
                 </span>
               ) : null}
             </div>
           </>
         ) : (
-          <h2 className="share-card__title">
-            Buying is open.
-            <br />
-            Selling needs a plea.
-          </h2>
+          <>
+            <div className="share-card__stamp share-card__stamp--pair">
+              <span className="stamp stamp--approved">APPROVED</span>
+              <span className="stamp stamp--denied">DENIED</span>
+            </div>
+            <h2 className="share-card__title">
+              Buying is open.
+              <br />
+              Selling needs
+              <br />a plea.
+            </h2>
+          </>
         )}
         <div className="share-card__foot">
           <div className="share-card__nums">
             {p ? (
               <>
-                <div>
-                  <b>{amount(p.amount, s?.constants.decimals)}</b>
-                  <span>
-                    {s?.constants.symbol || "PLEA"}{" "}
-                    {sold ? "sold" : "asks to sell"}
-                  </span>
-                </div>
-                <div>
-                  <b>
-                    {earnsPoints
-                      ? p.points || 0
-                      : p.status === 1
-                        ? `Need ${p.need}`
-                        : "0"}
-                  </b>
-                  <span>
-                    {earnsPoints
-                      ? `points ${p.recorded ? "recorded" : p.standing?.[0] ? "held" : "once recorded"}`
-                      : p.status === 1
-                        ? "waiting for a score"
-                        : "no points"}
-                  </span>
-                </div>
+                {state === "PENDING" ? (
+                  <>
+                    <div>
+                      <b>{p.need}</b>
+                      <span>need</span>
+                    </div>
+                    <div>
+                      <b>{amount(p.amount)}</b>
+                      <span>
+                        PLEA ·{" "}
+                        {p.balance
+                          ? `${Number((p.amount * 10000n) / p.balance) / 100}% of the bag`
+                          : "waiting for the judges"}
+                      </span>
+                    </div>
+                  </>
+                ) : state === "NO VERDICT" ? (
+                  <>
+                    <div>
+                      <b>
+                        {p.failure?.agreed || 0} of {p.failure?.answered || 0}
+                      </b>
+                      <span>
+                        judges agreed · {String(con(s, "CabalGate.QUORUM"))}{" "}
+                        needed
+                      </span>
+                    </div>
+                    <div>
+                      <b>No cooldown</b>
+                      <span>no points</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <b>{p.score}</b>
+                      <span>score</span>
+                    </div>
+                    <div>
+                      <b>{p.need}</b>
+                      <span>need</span>
+                    </div>
+                    <div>
+                      <b>{earnsPoints ? `+${p.points || 0}` : "No"}</b>
+                      <span>
+                        {earnsPoints
+                          ? `points${p.standing?.[0] ? " held" : ""}`
+                          : "points"}
+                      </span>
+                    </div>
+                    {earnsPoints && extra.data && extra.data.rank >= 0 && (
+                      <div>
+                        <b>#{extra.data.rank + 1}</b>
+                        <span>season {String(extra.data.season + 1n)}</span>
+                      </div>
+                    )}
+                    {sold && (
+                      <div>
+                        <b>{amount(soldFor(p, s!), 18, 2)}</b>
+                        <span>{s?.constants.pairSymbol} to the writer</span>
+                      </div>
+                    )}
+                    {state === "DENIED" && (
+                      <div>
+                        <b>
+                          {p.appealed
+                            ? "Appealed"
+                            : now <=
+                                  Number(p.verdictAt) +
+                                    Number(con(s, "CabalGate.COOLDOWN")) &&
+                                !dead
+                              ? "Open"
+                              : "Closed"}
+                        </b>
+                        <span>
+                          {p.appealed
+                            ? `in #${s?.logs.find((l) => l.eventName === "PleaSubmitted" && l.args.originalId === p.id)?.args.id || "…"}`
+                            : `appeal until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}`}
+                        </span>
+                      </div>
+                    )}
+                    {state === "UPHELD" && (
+                      <div>
+                        <b>Final</b>
+                        <span>
+                          no further appeal · first score{" "}
+                          {extra.data?.original?.score ?? "reading"}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             ) : (
-              <div>
-                <b>Make your case.</b>
-                <span>Test tokens, no value.</span>
-              </div>
+              <>
+                <div>
+                  <b>{String(con(s, "CabalGate.PANEL_SIZE"))}</b>
+                  <span>judges</span>
+                </div>
+                <div>
+                  <b>0–{String(con(s, "CabalGate.MAX_PLEA_SCORE"))}</b>
+                  <span>score</span>
+                </div>
+                <div>
+                  <b>{Number(con(s, "CabalGate.EXECUTE_WINDOW")) / 60} min</b>
+                  <span>to sell</span>
+                </div>
+              </>
             )}
           </div>
           <div className="share-card__url">
-            <span>Sepolia · test tokens</span>
-            <br />
-            <span>
-              {dead ? "The Cabal is dead. Trade freely." : "The Cabal decides."}
-            </span>
+            <span>{cardUrl}</span>
           </div>
         </div>
       </article>
     </div>
   );
 }
-export function Share({ id }: { id?: string }) {
-  const { s, r, toast } = useApp();
+export function Share({
+  id,
+  embedded = false,
+}: {
+  id?: string;
+  embedded?: boolean;
+}) {
+  const { s, r, toast, now } = useApp();
+  const { address } = useAccount();
   const found = s?.pleas.find((p) => String(p.id) === id);
   const query = useRead(
     () => getPlea(r, BigInt(id!), s?.logs),
     [id],
-    !!s && !!id && /^\d+$/.test(id) && !found,
+    !!s &&
+      !!id &&
+      /^\d+$/.test(id) &&
+      BigInt(id) > 0n &&
+      BigInt(id) < s.v["CabalGate.nextId"] &&
+      !found,
   );
   const p = found || query.data;
   const node = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const url = location.href.split("#")[0] + (p ? `#/p/${p.id}` : "#/");
-  const text = p
-    ? `PLEA #${p.id}: “${p.text}” ${s?.v["CabalGate.diedAt"] ? "The Cabal is dead. PLEA trades freely." : "Make your case. The Cabal decides."}`
+  const latestObjection =
+    p?.objections?.find((o) => o.ruling === 2) ||
+    p?.objections?.find((o) => o.ruling === 1) ||
+    p?.objections?.at(-1);
+  const state =
+    latestObjection && [1, 2, 3].includes(latestObjection.ruling)
+      ? (
+          { 1: "OBJECTION", 2: "SUSTAINED", 3: "OVERRULED" } as Record<
+            number,
+            string
+          >
+        )[latestObjection.ruling]
+      : p && s
+        ? pleaState(p, now, s)
+        : "";
+  const subject = p
+    ? address?.toLowerCase() === p.seller.toLowerCase()
+      ? "my plea"
+      : `plea #${p.id} by ${p.name || short(p.seller)}`
+    : "PLEA";
+  const ending = s?.v["CabalGate.diedAt"]
+    ? "The Cabal is dead; PLEA trades freely:"
+    : "Plead your case:";
+  const statusText = p
+    ? state === "PENDING"
+      ? `PENDING: the Cabal is judging ${subject}; need ${p.need}.`
+      : state === "NO VERDICT"
+        ? `NO VERDICT on ${subject}; ${p.failure?.answered ? `${p.failure.agreed} of ${p.failure.answered} agreed (${con(s, "CabalGate.QUORUM")} needed)` : "no answer"}. No cooldown.`
+        : `${state}: ${subject}, ${latestObjection && [2, 3].includes(latestObjection.ruling) ? latestObjection.newScore : p.score} vs need ${p.need}.${p.status === 4 ? ` Sold for ${tokenAmount(soldFor(p, s!), s, true)}.` : state === "UPHELD" ? " No further appeal." : state === "SUSTAINED" ? " No points; the sale stands." : state === "DENIED" && !p.appealed ? ` Appeal until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.` : ""}`
     : "Buying is open. Selling needs a plea.";
+  let quote =
+    p?.text
+      .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+      ?.slice(0, 2)
+      .join("")
+      .trim() ||
+    p?.text ||
+    "";
+  const budget = 280 - 23 - statusText.length - ending.length - 7;
+  if (quote.length > budget)
+    quote =
+      (quote.match(/[^.!?]+[.!?]/)?.[0] || quote)
+        .slice(0, Math.max(0, budget - 1))
+        .trim() + "…";
+  const text = `${statusText}${quote ? ` “${quote}”` : ""} ${ending}`;
   async function image(kind: "download" | "copy") {
     setBusy(kind);
     setError("");
@@ -165,6 +367,7 @@ export function Share({ id }: { id?: string }) {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       );
       if (!node.current) throw Error("Card unavailable");
+      const { toBlob } = await import("html-to-image");
       const blob = await toBlob(node.current, {
         width: 1200,
         height: 675,
@@ -182,34 +385,64 @@ export function Share({ id }: { id?: string }) {
         await navigator.clipboard.write([
           new ClipboardItem({ "image/png": blob }),
         ]);
-        toast?.({ text: "Image copied. Paste it into your post." });
+        toast?.({
+          kind: "info",
+          text: "Image copied.",
+          body: "Paste it into your post on X. The verdict is on your clipboard now.",
+        });
       } else {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `plea-${p?.id || "link"}-${p?.status || "card"}.png`;
+        a.download = p ? `plea-${p.id}.png` : "plea.png";
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-        toast?.({ text: "Image downloaded. Attach it to your post." });
+        toast?.({
+          kind: "info",
+          text: `Saved ${a.download}.`,
+          body: "1200 × 675. Attach it to your post on X.",
+        });
       }
-    } catch (e: any) {
-      setError(
-        e.message ||
-          "The image could not be drawn. Try Download image in a supported browser.",
-      );
+    } catch {
+      const text =
+        kind === "copy"
+          ? "This browser can’t copy images."
+          : "The image could not be drawn.";
+      const body =
+        kind === "copy"
+          ? "Use Download image, then attach the file to your post."
+          : "Try drawing it again after the fonts load.";
+      setError(text + " " + body);
+      toast?.({ kind: "bad", text, body });
     } finally {
       setBusy("");
     }
   }
   return (
     <div className="stack stack--lg share-workbench">
-      <Title title={p ? `Share plea #${p.id}` : "Share PLEA"}>
-        A 1200 × 675 PNG, drawn here in your browser from the share-card
-        component. Attach it to your post.
-      </Title>
+      {!embedded && (
+        <Title title={p ? `Share plea #${p.id}` : "Share PLEA"}>
+          A 1200 × 675 PNG, drawn here in your browser from the share-card
+          component. Attach it to your post.
+        </Title>
+      )}
       {id && !p && query.loading ? (
         <p>Reading this plea…</p>
-      ) : id && !p && query.error ? (
-        <Empty title="Plea not found">Check the plea number.</Empty>
+      ) : id &&
+        !p &&
+        (query.error ||
+          (!!s &&
+            (!/^\d+$/.test(id) ||
+              BigInt(id || "0") <= 0n ||
+              BigInt(id || "0") >= s.v["CabalGate.nextId"]))) ? (
+        <Empty
+          title={`No plea #${id} yet`}
+          action={{ href: "#/wall", label: "See the Wall" }}
+        >
+          Check the plea number.{" "}
+          {s?.v["PleaHook.seeded"]
+            ? `${Number(s.v["CabalGate.nextId"]) - 1} pleas so far.`
+            : "The first plea comes after trading opens."}
+        </Empty>
       ) : (
         <>
           <ShareCard key={String(p?.id || "default")} p={p} />
@@ -218,29 +451,38 @@ export function Share({ id }: { id?: string }) {
           </div>
           <div className="btn-row">
             <a
-              className="btn btn--primary"
+              className="btn btn--sm"
               href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`}
               target="_blank"
               rel="noreferrer"
             >
-              <Icon name="share-network" />
+              <Icon name="x-logo" />
               Share on X
+              <span className="sr-only">
+                {p ? ` of plea #${p.id}` : " of the default card"}
+              </span>
             </a>
             <button
-              className="btn"
+              className="btn btn--sm"
               disabled={!!busy}
               onClick={() => image("download")}
             >
-              <Icon name="download-simple" />
+              <Icon name="arrow-down" />
               {busy === "download" ? "Drawing image…" : "Download image"}
+              <span className="sr-only">
+                {p ? ` of plea #${p.id}` : " of the default card"}
+              </span>
             </button>
             <button
-              className="btn"
+              className="btn btn--sm"
               disabled={!!busy}
               onClick={() => image("copy")}
             >
               <Icon name="copy" />
               {busy === "copy" ? "Copying image…" : "Copy image"}
+              <span className="sr-only">
+                {p ? ` of plea #${p.id}` : " of the default card"}
+              </span>
             </button>
           </div>
           {error && (
@@ -248,17 +490,16 @@ export function Share({ id }: { id?: string }) {
               {error}
             </p>
           )}
-          <Panel title="The post">
-            <p>{text}</p>
+          <Panel title="Post text (Share on X fills it in)">
+            <p className="chain-text">{text}</p>
             <p className="mono addr__text">{url}</p>
             <p className="small">
-              X intent opens the text and link. Attach the downloaded PNG
-              yourself; a static site cannot upload media into X.
+              Attach the image: the link alone shows the default card.
             </p>
           </Panel>
         </>
       )}
-      {s?.pleas.length ? (
+      {!embedded && s?.pleas.length ? (
         <Panel title="Share another plea">
           <div className="cluster">
             {s.pleas.map((p) => (

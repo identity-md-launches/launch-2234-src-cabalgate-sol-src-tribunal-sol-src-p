@@ -1,7 +1,20 @@
+import { LETTERBOX, Q96 } from "./models";
 import { useAccount } from "wagmi";
 import { useState } from "react";
 import { useApp, useRead } from "./context";
-import { con, read, tokenAmount, utc, val, type Plea } from "./chain";
+import {
+  con,
+  read,
+  tokenAmount,
+  utc,
+  val,
+  clock,
+  span,
+  soldFor,
+  pleaState,
+  short,
+  type Plea,
+} from "./chain";
 import {
   AddressView,
   Costs,
@@ -15,431 +28,313 @@ import {
 } from "./components";
 import { parseAmount } from "./pages-trade";
 export function HomeDetails() {
-  const { r, s } = useApp();
-  const owner = useRead(() => read(r, "PLEA", "owner"), [], !!s);
-  const mintedTo = (name: string) =>
-    s?.historyError
-      ? undefined
-      : s?.logs
-          .filter(
-            (l) =>
-              l.eventName === "Transfer" &&
-              l.args.from === "0x" + "0".repeat(40) &&
-              l.args.to?.toLowerCase() === r.addresses[name]?.toLowerCase(),
-          )
-          .reduce((n, l) => n + l.args.value, 0n);
-  return (
-    <>
-      <section className="section">
-        <div className="section__head">
-          <h2>Fees and supply</h2>
-        </div>
-        <div className="split">
-          <Panel title="Fees on every trade">
-            <Costs
-              rows={[
-                [
-                  "Cashback",
-                  `${Number(con(s, "PleaHook.CASHBACK_BPS") || 0) / 100}%`,
-                ],
-                [
-                  "Owner",
-                  `${Number(con(s, "PleaHook.OWNER_BPS") || 0) / 100}%`,
-                ],
-                [
-                  "Season prize pot",
-                  `${Number(con(s, "PleaHook.PRIZE_BPS") || 0) / 100}%`,
-                ],
-                [
-                  "Buy wall",
-                  `${Number(con(s, "PleaHook.POOL_BPS") || 0) / 100}%`,
-                ],
-                [
-                  "PLEA burned",
-                  `${Number(con(s, "PleaHook.PLEA_BURN_BPS") || 0) / 100}%`,
-                ],
-              ]}
-            />
-            <p className="small">
-              Paired-token fees are charged on what reaches the pool. The burn
-              is taken from the PLEA leg. During the opening window, buys also
-              pay the live launch fee shown on Buy.
-            </p>
-          </Panel>
-          <Panel title="Supply">
-            <Costs
-              rows={[
-                ["At launch", tokenAmount(con(s, "PLEA.TOTAL_SUPPLY"), s)],
-                [
-                  "Current total supply",
-                  tokenAmount(val(s, "PLEA.totalSupply"), s),
-                ],
-                ["Minted to pool hook", tokenAmount(mintedTo("PleaHook"), s)],
-                ["Minted for seasons", tokenAmount(mintedTo("Seasons"), s)],
-                [
-                  "Minted to distributor",
-                  tokenAmount(mintedTo("PleaDistributor"), s),
-                ],
-                [
-                  "Burned by hook",
-                  tokenAmount(val(s, "PleaHook.totalBurned"), s),
-                ],
-              ]}
-            />
-            <p className="small">
-              Launch allocations are read from the token’s mint events. The
-              supply cannot grow after initialization.
-            </p>
-          </Panel>
-        </div>
-      </section>
-      <section className="section">
-        <div className="section__head">
-          <h2>The owner’s powers, in plain words</h2>
-        </div>
-        <Panel>
-          <p>
-            The owner can permanently allow a sender to transfer freely while
-            the Cabal lives. This power is add-only. An allowed sender may use
-            other venues without a plea. Direct transfers to this pool’s
-            PoolManager and the gate remain restricted.
-          </p>
-          <p>
-            The distributor’s owner can set its Merkle root once. The gate,
-            Letterbox and Tribunal have no owner controls to pick a verdict.
-            PLEA’s current owner and the hook’s launch owner are excluded from
-            season prizes.
-          </p>
-          {owner.data && (
-            <AddressView address={owner.data} label="PLEA owner" />
-          )}
-        </Panel>
-      </section>
-    </>
-  );
-}
-export function BuyWallPanel() {
-  const { r, s } = useApp();
-  const [input, setInput] = useState("");
-  const raw = parseAmount(input, s?.constants.pairDecimals || 18);
+  const { s } = useApp(),
+    dead = !!val(s, "CabalGate.diedAt"),
+    c = (key: string) => Number(con(s, `PleaHook.${key}`) || 0),
+    pair = s?.constants.pairSymbol;
+  const total = BigInt(con(s, "PLEA.TOTAL_SUPPLY") || 0n);
   return (
     <section className="section">
       <div className="section__head">
-        <h2>The buy wall</h2>
+        <h2>Fees and supply</h2>
+        <p className="meta">Paid inside the swap, nothing to claim later</p>
       </div>
       <div className="split">
-        <Panel title="Inventory and reserves">
+        <Panel title="Fees on every trade">
           <Costs
             rows={[
               [
-                "Inventory cap",
-                tokenAmount(val(s, "PleaHook.inventoryCap"), s),
+                `Cashback to you, in plain ${pair}`,
+                `${c("CASHBACK_BPS") / 100}%`,
               ],
-              ["Cap floor", tokenAmount(con(s, "PleaHook.CAP_FLOOR"), s)],
+              ["Owner", `${c("OWNER_BPS") / 100}%`],
+              ...(!dead
+                ? [
+                    ["Season prize pot", `${c("PRIZE_BPS") / 100}%`] as [
+                      string,
+                      string,
+                    ],
+                  ]
+                : []),
               [
-                "Reserve, plain tokens",
-                tokenAmount(val(s, "PleaHook.retainedImd"), s, true),
+                `${pair} buy wall, kept in the pool`,
+                `${(c("POOL_BPS") + (dead ? c("PRIZE_BPS") : 0)) / 100}%`,
               ],
-              [
-                "Reserve, PoolManager claims",
-                tokenAmount(val(s, "PleaHook.retainClaims"), s, true),
-              ],
-              [
-                "Placement guard per day",
-                `${String(con(s, "PleaHook.WALL_GUARD_TICKS_PER_DAY") || "—")} ticks`,
-              ],
-            ]}
-          />
-          <TxButton
-            name="PleaHook"
-            fn="rebalance"
-            label="Rebalance buy wall"
-            disabled={
-              !val(s, "PleaHook.seeded") || !val(s, "PleaHook.pendingRebalance")
-            }
-            reason="Anyone may rebalance when the hook reports work ready."
-          />
-        </Panel>
-        <Panel title="Fund the buy wall">
-          <p>
-            Contribute paired tokens to the hook’s wall reserve. This is a
-            contribution to liquidity, with no personal withdrawal.
-          </p>
-          <AmountInput
-            id="fund-wall"
-            label="Contribution"
-            value={input}
-            onChange={setInput}
-            unit={s?.constants.pairSymbol || "paired token"}
-          />
-          <ApprovedAction
-            name="PleaHook"
-            fn="fundWall"
-            args={[raw]}
-            label="Fund buy wall"
-            token={r.addresses.PairToken}
-            spender={r.addresses.PleaHook}
-            spend={raw}
-            disabled={raw <= 0n || !val(s, "PleaHook.seeded")}
-            reason={raw <= 0n ? "Enter a contribution amount." : undefined}
-            primary={false}
-          />
-        </Panel>
-      </div>
-    </section>
-  );
-}
-export function LetterDetails() {
-  const { r, s } = useApp();
-  const fee = s?.v.fees?.[0] as bigint | undefined;
-  const oracle = con(s, "CabalGate.ORACLE_FEE") as bigint | undefined;
-  return (
-    <section className="section">
-      <div className="section__head">
-        <h2>What it costs</h2>
-        <p className="meta">Letters pay no auto-sell fee</p>
-      </div>
-      <div className="split">
-        <Panel title="Fees">
-          <Costs
-            rows={[
-              ["Oracle fee", tokenAmount(oracle, s, true)],
-              [
-                "Tip for whoever sells",
-                tokenAmount(
-                  fee !== undefined && oracle !== undefined
-                    ? fee - oracle
-                    : undefined,
-                  s,
-                  true,
-                ),
-              ],
-              ["New letter, paid in PLEA", tokenAmount(fee, s, true)],
-              [
-                "Appeal, paid in PLEA",
-                tokenAmount(s?.v.appealFees?.[0], s, true),
-              ],
-              ["Most PLEA for the fee", tokenAmount(s?.v.fees?.[1], s)],
+              ["Burned", `${c("PLEA_BURN_BPS") / 100}% of the PLEA`],
+              ["Total", `${(c("IMD_FEE_BPS") + c("PLEA_BURN_BPS")) / 100}%`],
             ]}
           />
           <p className="small">
-            The contract calculates the PLEA fee at its hourly snapshot, with a
-            cap. Unspent PLEA comes back. Sending SELL yourself returns the
-            runner tip to you. The oracle fee is spent even if there is no
-            verdict.
+            On a 100 {pair} buy,{" "}
+            {tokenAmount(
+              (100n * 10n ** 18n * 10000n) / BigInt(10000 + c("IMD_FEE_BPS")),
+              s,
+              true,
+            )}{" "}
+            reaches the pool. The fee is charged on what reaches it;{" "}
+            {c("PLEA_BURN_BPS") / 100}% of the PLEA is burned. Launch fees come
+            on top during the opening window.
           </p>
+          {val(s, "PleaHook.pendingRebalance") && (
+            <>
+              <p className="small">
+                Anyone can rebalance the buy wall: it burns bought PLEA and
+                places collected imdTEST in the pool just below the price.
+              </p>
+              <TxButton
+                name="PleaHook"
+                fn="rebalance"
+                label="Rebalance buy wall"
+                small
+              />
+            </>
+          )}
         </Panel>
-        <Panel title="Read your status on Etherscan">
-          <p>
-            On the Letterbox’s Read Contract tab, call{" "}
-            <code>status(address)</code> with your wallet address. It returns
-            one sentence about your latest plea, its verdict and points.
-          </p>
-          <p>
-            <code>leaderboard()</code> prints the current season’s standings,
-            rank shares and bonus amounts.
-          </p>
-          <a
-            className="btn"
-            href={`${r.network.explorer}/address/${r.addresses.Letterbox}#readContract`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Read the Letterbox
+        <Panel title="Supply">
+          <Costs
+            rows={[
+              [
+                "Pool liquidity, locked forever",
+                `${tokenAmount((total * 82n) / 100n, s)} (82%)`,
+              ],
+              [
+                `Season bonus: ${tokenAmount(con(s, "Seasons.BONUS_PER_SEASON"), s)} in each of the first ${con(s, "Seasons.BONUS_SEASONS")} seasons`,
+                `${tokenAmount((total * 6n) / 100n, s)} (6%)`,
+              ],
+              [
+                "Claim list: swarm 10% + airdrop 2%",
+                `${tokenAmount((total * 12n) / 100n, s)} (12%)`,
+              ],
+              ["Total PLEA at launch", tokenAmount(total, s)],
+              [
+                "Burned so far",
+                tokenAmount(
+                  total - BigInt(val(s, "PLEA.totalSupply") || 0n),
+                  s,
+                ),
+              ],
+              ["Supply now", tokenAmount(val(s, "PLEA.totalSupply"), s)],
+            ]}
+          />
+          <a className="btn btn--sm" href="#/claim">
+            Check the claim list <Icon name="arrow-right" />
           </a>
         </Panel>
       </div>
     </section>
   );
 }
-export function ProfileDetails({
-  wallet,
-  balance,
-}: {
-  wallet: `0x${string}`;
-  balance: bigint | undefined;
-}) {
-  const { r, s, now } = useApp();
-  const { address } = useAccount();
-  const season = s?.v["Seasons.currentSeason"]?.[1];
-  const cap = con(s, "CabalGate.MAX_SELL") as bigint | undefined;
-  const raw =
-    balance !== undefined && cap !== undefined
-      ? balance / 5n < cap
-        ? balance / 5n
-        : cap
-      : 0n;
-  const info = useRead(
-    async () => {
-      const [fact, best, seat, nft] = await Promise.all([
-        read(r, "CabalGate", "factScore", [wallet, raw]),
-        read(r, "Seasons", "bestOf", [season, wallet]),
-        read(r, "Seasons", "holdsSeat", [wallet]),
-        read(r, "Seasons", "seat"),
-      ]);
-      return { fact, best, seat, nft };
-    },
-    [wallet, raw.toString(), season?.toString()],
-    !!s && balance !== undefined,
-  );
-  const prizes =
-    s?.logs.filter(
-      (l) =>
-        ["PrizePaid", "BonusPaid"].includes(l.eventName) &&
-        l.args.wallet?.toLowerCase() === wallet.toLowerCase(),
-    ) || [];
+export function BuyWallPanel() {
+  return null;
+}
+export function LetterDetails() {
+  const { r, s } = useApp(),
+    { address } = useAccount(),
+    oracle = BigInt(con(s, "CabalGate.ORACLE_FEE") || 0n),
+    fee = oracle + LETTERBOX.TIP,
+    appeal = fee + BigInt(con(s, "CabalGate.APPEAL_POOL_SHARE") || 0n),
+    price = BigInt(val(s, "PleaHook.latestPrice") || 0n),
+    pleaFee = (v: bigint) =>
+      price
+        ? `about ${tokenAmount((v * Q96 * 10000n) / price / (10000n - BigInt(con(s, "PleaHook.IMD_FEE_BPS")) - BigInt(con(s, "PleaHook.PLEA_BURN_BPS"))), s, false, 0, "up")}`
+        : "after trading opens";
+  const status = useRead(
+      () => read(r, "Letterbox", "status", [address]),
+      [address],
+      !!s && !!address,
+    ),
+    leaderboard = useRead(() => read(r, "Letterbox", "leaderboard"), [], !!s);
   return (
     <>
       <section className="section">
         <div className="section__head">
-          <h2>Your next plea, at 20%</h2>
+          <h2>What it costs</h2>
         </div>
-        <Panel>
-          <p>
-            {tokenAmount(raw, s)} at today’s balance, within the live cap. The
-            facts below are calculated by CabalGate.factScore; buying or the
-            next checkpoint can change them.
-          </p>
-          {info.data && (
-            <Meter
-              fact={info.data.fact}
-              need={Number(con(s, "CabalGate.PASS_MARK")) - info.data.fact}
+        <div className="split">
+          <Panel title="Fees">
+            <Costs
+              rows={[
+                ["Oracle fee", tokenAmount(oracle, s, true)],
+                [
+                  "Tip for whoever sells it",
+                  tokenAmount(LETTERBOX.TIP, s, true),
+                ],
+                ["A letter", tokenAmount(fee, s, true)],
+                ["In PLEA", pleaFee(fee)],
+                [
+                  "Never more than",
+                  s?.v.fees
+                    ? tokenAmount(s.v.fees[1], s, false, 0, "up")
+                    : "after trading opens",
+                ],
+                ["APPEAL", tokenAmount(appeal, s, true)],
+                ["Appeal in PLEA", pleaFee(appeal)],
+                [
+                  "Appeal, never more than",
+                  s?.v.appealFees
+                    ? tokenAmount(s.v.appealFees[1], s, false, 0, "up")
+                    : "after trading opens",
+                ],
+                ["Auto-sell fee", "none for letters"],
+              ]}
             />
-          )}
-          <a className="btn" href="#/plead">
-            Plead to sell
-          </a>
-        </Panel>
-      </section>
-      <section className="section">
-        <div className="section__head">
-          <h2>Your seasons</h2>
-        </div>
-        <Panel>
-          <Costs
-            rows={[
-              [
-                "Current season",
-                season !== undefined ? String(season + 1n) : "Reading…",
-              ],
-              [
-                "Best three recorded pleas",
-                info.data?.best.join(" · ") || "Reading…",
-              ],
-              [
-                "Points",
-                info.data
-                  ? String(
-                      info.data.best.reduce(
-                        (n: number, p: number) => n + Number(p),
-                        0,
-                      ),
-                    )
-                  : "Reading…",
-              ],
-            ]}
-          />
-          {prizes.map((l) => (
-            <p key={l.transactionHash + String(l.logIndex)}>
-              Season {Number(l.args.season) + 1}:{" "}
-              {tokenAmount(l.args.amount, s, l.eventName === "PrizePaid")} ·{" "}
-              <a href={`${r.network.explorer}/tx/${l.transactionHash}`}>
-                View prize transaction
-              </a>
+          </Panel>
+          <Panel title="Limits">
+            <ul>
+              <li>
+                1 to {String(con(s, "CabalGate.MAX_PLEA_BYTES") || 280)} bytes:
+                about 280 Latin, 140 Cyrillic or 93 CJK characters.
+              </li>
+              <li>One line, no hidden characters.</li>
+              <li>
+                A balance of at least{" "}
+                {s?.v.fees
+                  ? tokenAmount(BigInt(s.v.fees[1]) * 10n, s)
+                  : "10 × the PLEA fee cap, after trading opens"}
+                .
+              </li>
+              <li>
+                A plea worth at least{" "}
+                {tokenAmount(LETTERBOX.MIN_SALE_VALUE, s, true)}.
+              </li>
+              <li>
+                20% of the balance must be at least{" "}
+                {tokenAmount(LETTERBOX.MIN_LETTER, s)}.
+              </li>
+            </ul>
+            <p>
+              The same need and cooldown apply. Fees are paid in PLEA; the
+              oracle fee is spent even if no verdict comes.
             </p>
-          ))}
-          {!prizes.length && <p>No prize payouts in this test run yet.</p>}
-          <a className="link-btn" href="#/seasons">
-            Open Seasons <Icon name="arrow-right" />
-          </a>
-        </Panel>
+          </Panel>
+        </div>
       </section>
       <section className="section">
         <div className="section__head">
-          <h2>IMD seat</h2>
+          <h2>Example letters</h2>
+        </div>
+        <div className="auto-grid">
+          {[
+            "I kept the rest. This fifth pays the rent.",
+            "APPEAL My first plea was too brief. Here is what I meant.",
+            "NAME kafka_cat",
+          ].map((text) => (
+            <Panel key={text}>
+              <p className="letter-sample">{text}</p>
+              <p className="small">
+                Reads as:{" "}
+                {window.PleaText.checkLetter(text).reads?.replace(
+                  /\bIMD\b/g,
+                  s?.constants.pairSymbol || "imdTEST",
+                )}
+              </p>
+            </Panel>
+          ))}
+        </div>
+      </section>
+      <section className="section">
+        <div className="section__head">
+          <h2>Read your status on Etherscan</h2>
         </div>
         <Panel>
           <p>
-            {info.data?.seat
-              ? "This wallet holds an IMD seat."
-              : "No seat multiplier for this wallet now."}{" "}
-            Seasons checks seat ownership when points are recorded. A seat
-            multiplies points by ×
-            {Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS") || 0) / 10000},
-            rounded down; it does not change the judges’ score, your need or the
-            prize threshold.
+            {status.data ||
+              "Connect in the top bar to read the wallet’s letter status here, or use status(address) on Etherscan."}
           </p>
-          {info.data?.nft && (
-            <AddressView address={info.data.nft} label="IMD seat NFT" />
-          )}
+          {leaderboard.data && <p>{leaderboard.data}</p>}
+          <a
+            className="btn btn--sm"
+            href={`${r.network.explorer}/address/${r.addresses.Letterbox}#readContract`}
+          >
+            Open Read Contract <Icon name="arrow-right" />
+          </a>
         </Panel>
       </section>
     </>
   );
 }
+
 export function PleaTimeline({ p }: { p: Plea }) {
-  const { s, r } = useApp();
-  const sold = s?.logs.find(
-    (l) => l.eventName === "SellExecuted" && l.args.id === p.id,
-  );
+  const { s, now, r } = useApp(),
+    approved = [2, 4, 5].includes(p.status),
+    points = approved && !p.standing?.[1] && !p.excluded,
+    window = Number(p.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")),
+    objection =
+      Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW")),
+    cooldown = Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN"));
+  const steps: any[] = [
+    ["Submitted", clock(p.submittedAt), "arrow-right", "is-done"],
+    [
+      p.verdictAt ? "Judged" : "Waiting for the Cabal",
+      p.verdictAt
+        ? `${clock(p.verdictAt)} · ${p.score} vs need ${p.need}`
+        : "Usually 3 to 6 minutes.",
+      "gavel",
+      p.verdictAt ? "is-done" : "is-now",
+    ],
+  ];
+  if (approved)
+    steps.push([
+      p.status === 4 ? "Sold" : "Sell window",
+      p.status === 4
+        ? `${tokenAmount(soldFor(p, s!), s, true)} to the writer`
+        : now > window
+          ? `Closed at ${clock(window)}`
+          : `Sell by ${clock(window)}`,
+      "coins",
+      p.status === 4 || now > window ? "is-done" : "is-now",
+    ]);
+  if (points)
+    steps.push(
+      [
+        "Objections",
+        p.standing?.[0]
+          ? `Points held until ${clock(objection)} or the panel rules`
+          : `Closed at ${clock(objection)}`,
+        "megaphone-simple",
+        p.standing?.[0] ? "is-now" : "is-done",
+      ],
+      [
+        "Record the points",
+        p.recorded
+          ? `+${p.points} points recorded.`
+          : `+${p.points} points. Nothing records them by itself.`,
+        "trophy",
+        p.recorded ? "is-done" : p.standing?.[0] ? "is-later" : "is-now",
+      ],
+    );
+  if (p.status === 3 && !p.isAppeal)
+    steps.push([
+      "Appeal window",
+      p.appealed
+        ? "An appeal has been sent."
+        : `One appeal until ${clock(cooldown)}`,
+      "arrow-right",
+      now <= cooldown && !p.appealed ? "is-now" : "is-done",
+    ]);
+  if (p.verdictAt)
+    steps.push([
+      `${span(Number(con(s, "CabalGate.COOLDOWN")), "adj")} cooldown`,
+      p.status === 4
+        ? "Runs from the sale."
+        : `From this verdict until ${clock(cooldown)}`,
+      "timer",
+      now > cooldown ? "is-done" : "is-now",
+    ]);
   return (
-    <Panel title="Timeline">
+    <Panel level={2} title="Timeline">
       <ol className="timeline">
-        <li className="is-now">
-          <span className="timeline__dot">
-            <Icon name="check" />
-          </span>
-          <div>
-            <p className="timeline__title">Submitted</p>
-            <p className="timeline__meta">{utc(p.submittedAt)}</p>
-          </div>
-        </li>
-        <li className={p.verdictAt ? "is-now" : "is-later"}>
-          <span className="timeline__dot">
-            <Icon name="gavel" />
-          </span>
-          <div>
-            <p className="timeline__title">
-              {p.verdictAt ? "Verdict" : "Waiting for the Cabal"}
-            </p>
-            <p className="timeline__meta">
-              {p.verdictAt
-                ? `${utc(p.verdictAt)} · ${p.score} vs need ${p.need}`
-                : "The deadline is shown above. No fee is returned if no score arrives."}
-            </p>
-          </div>
-        </li>
-        {sold && (
-          <li className="is-now">
+        {steps.map(([title, body, icon, state]) => (
+          <li className={state} key={title}>
             <span className="timeline__dot">
-              <Icon name="check" />
+              <Icon name={icon} />
             </span>
             <div>
-              <p className="timeline__title">Sold</p>
-              <p className="timeline__meta">
-                {tokenAmount(sold.args.imdOut, s, true)} ·{" "}
-                <a href={`${r.network.explorer}/tx/${sold.transactionHash}`}>
-                  View sale transaction
-                </a>
-              </p>
+              <p className="timeline__title">{title}</p>
+              <p className="timeline__meta">{body}</p>
             </div>
           </li>
-        )}
-        <li className={p.recorded ? "is-now" : "is-later"}>
-          <span className="timeline__dot">
-            <Icon name="trophy" />
-          </span>
-          <div>
-            <p className="timeline__title">
-              {p.recorded ? "Points recorded" : "Points wait"}
-            </p>
-            <p className="timeline__meta">
-              {p.recorded
-                ? `${p.points} points counted at record time.`
-                : "An approval can be recorded after the objection hold ends. Nothing records it by itself."}
-            </p>
-          </div>
-        </li>
+        ))}
       </ol>
     </Panel>
   );

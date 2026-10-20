@@ -4,7 +4,7 @@
 
 The launch #2234 frontend is in **[web/](web/)**, with the complete static export in **[dist/](dist/)**. It reads the supplied run 9 deployment at runtime; no contracts were changed or deployed. The historical contract notes below remain intact.
 
-See **[FRONTEND.md](FRONTEND.md)** for installation, preview, configuration and action flows, **[DESIGN.md](DESIGN.md)** for the pinned visual system, and **[VALIDATION.md](VALIDATION.md)** for browser and interaction results.
+See **[FRONTEND.md](FRONTEND.md)** for installation, preview, configuration and action flows, **[FIXES.md](FIXES.md)** for all 73 review items, **[DESIGN.md](DESIGN.md)** for the pinned visual system, and **[VALIDATION.md](VALIDATION.md)** for browser and interaction results.
 
 ---
 

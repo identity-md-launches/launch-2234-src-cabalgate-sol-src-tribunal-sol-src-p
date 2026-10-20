@@ -1,11 +1,24 @@
-import { useEffect, useState } from "react";
+import { Profile } from "./profile";
+import { Seasons } from "./seasons";
+import { useEffect, useState, useRef } from "react";
 import { useApp } from "./context";
-import { con, duration, tokenAmount, utc, val } from "./chain";
-import { Icon, Notice } from "./components";
+import {
+  con,
+  duration,
+  tokenAmount,
+  utc,
+  val,
+  seasonState,
+  potOf,
+  span,
+  deadman,
+  clock,
+} from "./chain";
+import { Icon, Notice, Title, Empty } from "./components";
 import { Wallet } from "./wallet";
 import { Buy, Plead } from "./pages-trade";
-import { Home, Letters, Claim, Profile } from "./pages-info";
-import { Wall, PleaPage, Objections, Seasons } from "./pages-court";
+import { Home, Letters, Claim } from "./pages-info";
+import { Wall, PleaPage, Objections } from "./pages-court";
 import { Share } from "./share";
 const PAGES = [
   "Buy",
@@ -17,9 +30,10 @@ const PAGES = [
   "Claim",
 ];
 export default function App() {
-  const { r, s, error, refresh, now } = useApp();
+  const { r, s, error, refresh, now, receipts } = useApp();
   const [hash, setHash] = useState(location.hash || "#/");
   const [menu, setMenu] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const [theme, setTheme] = useState(
     document.documentElement.dataset.theme || "light",
   );
@@ -30,11 +44,18 @@ export default function App() {
     const handle = () => {
       setHash(location.hash || "#/");
       setMenu(false);
+      document.getElementById("main")?.focus({ preventScroll: true });
       window.scrollTo(0, 0);
     };
     window.addEventListener("hashchange", handle);
     const esc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(false);
+      if (e.key === "Escape") {
+        const restore =
+          document.getElementById("drawer")?.contains(document.activeElement) ||
+          document.activeElement === menuButton.current;
+        setMenu(false);
+        if (restore) menuButton.current?.focus();
+      }
     };
     window.addEventListener("keydown", esc);
     return () => {
@@ -43,12 +64,39 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    document.title = `${page ? `${page === "p" ? "Plea #" + path[1] : page.charAt(0).toUpperCase() + page.slice(1)} · ` : ""}PLEA · Sepolia test run 9`;
+    const titles: Record<string, string> = {
+      "": "Selling needs a plea",
+      how: "Selling needs a plea",
+      contracts: "Selling needs a plea",
+      buy: "Buy PLEA",
+      plead: "Plead to sell",
+      wall: "The Wall",
+      seasons: "Seasons",
+      letters: "Plead by letter",
+      objections: "Objection!",
+      claim: "Claim your PLEA",
+      profile: "Profile",
+      share: "Share cards",
+      "share-cards": "Share cards",
+    };
+    document.title =
+      (page === "p" ? `Plea #${path[1]}` : titles[page] || "Page not found") +
+      " · PLEA";
     const anchor =
-      page === "how" ? "how" : page === "contracts" ? "contracts" : "";
+      page === "how"
+        ? "how"
+        : page === "contracts"
+          ? "contracts"
+          : page === "seasons" && location.hash.includes("seat=1")
+            ? "seat"
+            : "";
     if (anchor)
       setTimeout(() => document.getElementById(anchor)?.scrollIntoView(), 100);
   }, [hash]);
+  useEffect(() => {
+    if (menu) document.querySelector<HTMLAnchorElement>("#drawer a")?.focus();
+  }, [menu]);
+  const season = seasonState(s, now);
   function toggle() {
     const next = theme === "dark" ? "light" : "dark";
     document.documentElement.classList.add("no-motion");
@@ -70,7 +118,7 @@ export default function App() {
       aria-pressed={theme === "dark"}
       onClick={toggle}
     >
-      <Icon name={theme === "dark" ? "sun" : "moon"} />
+      <Icon name="moon" />
     </button>
   );
   const links = PAGES.map((p) => (
@@ -107,6 +155,7 @@ export default function App() {
             {toggleButton}
             <Wallet />
             <button
+              ref={menuButton}
               className="icon-btn menu-btn"
               aria-label="Menu"
               aria-expanded={menu}
@@ -124,9 +173,6 @@ export default function App() {
               <li>
                 <a href="#/how">How it works</a>
               </li>
-              <li>
-                <a href="#/profile">Profile</a>
-              </li>
             </ul>
             <div className="theme-row">
               <span>Theme</span>
@@ -140,13 +186,17 @@ export default function App() {
               <b>Sepolia test run 9 · test tokens, no value</b>
             </span>
             <span className="status-item">
-              <span
-                className={`live-dot ${dead || !s?.v["PleaHook.seeded"] ? "live-dot--dead" : ""}`}
-                aria-hidden="true"
-              />
+              {s?.v["PleaHook.seeded"] && (
+                <span
+                  className={`live-dot ${dead || !s?.v["PleaHook.seeded"] ? "live-dot--dead" : ""}`}
+                  aria-hidden="true"
+                />
+              )}
               <b>
                 {!s
-                  ? "Reading the Cabal…"
+                  ? error
+                    ? "Can’t reach Sepolia"
+                    : "Reading the Cabal…"
                   : !s.v["PleaHook.seeded"]
                     ? "Trading not open yet"
                     : dead
@@ -154,14 +204,24 @@ export default function App() {
                       : "Cabal alive"}
               </b>
               {s?.v["PleaHook.seeded"] && !dead
-                ? ` · dies in ${duration(Number(val(s, "CabalGate.lastVerdictAt")) + Number(con(s, "CabalGate.DEADMAN")) - now)} without a verdict`
-                : ""}
+                ? ` · dies in ${deadman(Number(val(s, "CabalGate.lastVerdictAt")) + Number(con(s, "CabalGate.DEADMAN")) - now)} without a verdict`
+                : dead
+                  ? ` · no verdict for ${span(Number(con(s, "CabalGate.DEADMAN")))}`
+                  : ""}
             </span>
             {s?.v["PleaHook.seeded"] && (
               <>
                 <span className="status-item">
-                  <b>Season {Number(val(s, "Seasons.currentSeason")[1]) + 1}</b>{" "}
-                  · pot {tokenAmount(val(s, "Seasons.pot"), s, true)}
+                  {season && (
+                    <>
+                      <b>Season {String(season.displayed + 1n)}</b> ·{" "}
+                      {season.dead
+                        ? season.current.closed
+                          ? "closed"
+                          : `ended with the Cabal · close it from ${clock(Number(season.current.bounds[2]) + Number(con(s, "Seasons.CLOSE_GRACE")))}`
+                        : `${duration(Number(season.current.bounds[2]) - now)} left · pot ${tokenAmount(potOf(s), s, true)}${season.displayed < BigInt(con(s, "Seasons.BONUS_SEASONS")) ? ` + ${tokenAmount(con(s, "Seasons.BONUS_PER_SEASON"), s)}` : ""}`}
+                    </>
+                  )}
                 </span>
                 <span className="status-item">
                   1M {s.constants.symbol} ={" "}
@@ -184,9 +244,8 @@ export default function App() {
             <span className="live-dot live-dot--dead" aria-hidden="true" />
             <span>
               The Cabal is dead: no verdict for{" "}
-              {duration(Number(con(s, "CabalGate.DEADMAN")))}. PLEA trades
-              freely forever. Pleas and objections are closed; sell on the Buy
-              page.
+              {span(Number(con(s, "CabalGate.DEADMAN")))}. PLEA trades freely
+              forever. Pleas and objections are closed; sell on the Buy page.
             </span>
           </div>
         </div>
@@ -194,7 +253,16 @@ export default function App() {
       <main id="main" className="page main" tabIndex={-1}>
         {error && (
           <div className="app-error error-box" role="alert">
-            <p className="error-box__title">Cannot read Sepolia</p>
+            <p className="error-box__title">
+              <Icon name="plugs" />
+              {page === "buy"
+                ? "Can’t read the price"
+                : page === "profile"
+                  ? "Can’t read this profile"
+                  : page === ""
+                    ? "Can’t read the latest verdicts"
+                    : "Can’t reach Sepolia"}
+            </p>
             <p>{error}</p>
             <button className="btn btn--sm" onClick={refresh}>
               Try again
@@ -211,7 +279,35 @@ export default function App() {
             </Notice>
           </div>
         )}
-        {page === "buy" ? (
+        {!s && error ? null : !s ? (
+          <>
+            <Title
+              title={
+                page
+                  ? {
+                      buy: "Buy PLEA",
+                      plead: "Plead to sell",
+                      seasons: "Seasons",
+                      wall: "The Wall",
+                      letters: "Plead by letter",
+                      profile: "Profile",
+                      claim: "Claim your PLEA",
+                      objections: "Objection!",
+                    }[page] || "PLEA"
+                  : "Buying is open. Selling needs a plea."
+              }
+            />
+            <p className="loading-label">
+              <Icon name="hourglass" />
+              Reading the pool, the Cabal and the season from the chain…
+            </p>
+            <div className="skeleton" aria-hidden="true">
+              <span className="skeleton__line" />
+              <span className="skeleton__line" />
+              <span className="skeleton__line" />
+            </div>
+          </>
+        ) : page === "buy" ? (
           <Buy />
         ) : page === "plead" ? (
           <Plead />
@@ -231,8 +327,33 @@ export default function App() {
           <PleaPage id={path[1] || ""} />
         ) : page === "share" || page === "share-cards" ? (
           <Share id={path[1]} />
-        ) : (
+        ) : ["", "how", "contracts"].includes(page) ? (
           <Home />
+        ) : (
+          <>
+            <Title title="Page not found" />
+            <Empty
+              title={`No page at #/${page}`}
+              action={{ href: "#/", label: "Go to Home" }}
+            >
+              Check the link, or pick a page from the menu.
+            </Empty>
+          </>
+        )}
+        {receipts.length > 0 && (
+          <div
+            className="stack form-actions-top"
+            aria-label="Confirmed transactions"
+          >
+            {receipts.map((receipt) => (
+              <p className="small" key={receipt.key}>
+                {receipt.text}{" "}
+                <a href={`${r.network.explorer}/tx/${receipt.hash}`}>
+                  View transaction
+                </a>
+              </p>
+            ))}
+          </div>
         )}
       </main>
       <footer className="site-footer">
@@ -251,6 +372,7 @@ export default function App() {
               <li>
                 <a href="#/contracts">Contracts</a>
               </li>
+
               <li>
                 <a href="#/profile">Profile</a>
               </li>
