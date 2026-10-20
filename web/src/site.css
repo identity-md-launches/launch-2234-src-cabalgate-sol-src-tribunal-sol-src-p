@@ -1,0 +1,212 @@
+@font-face {
+  font-family: Archivo;
+  src: url("/fonts/archivo-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+[hidden] {
+  display: none !important;
+}
+.wallet-sheet {
+  background: var(--card);
+  color: var(--ink);
+  border: var(--bw) solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  width: calc(100% - 2 * var(--gutter));
+  max-width: 420px;
+  max-height: 90dvh;
+  overflow: auto;
+  box-shadow: var(--shadow-lg);
+}
+.wallet-sheet::backdrop {
+  background: var(--paper-2);
+}
+.wallet-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  min-height: 48px;
+  padding: var(--space-3);
+  background: var(--card);
+  border: var(--bw-thin) solid var(--line);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  font-weight: var(--w-bold);
+}
+.wallet-row:hover {
+  background: var(--paper-2);
+}
+@media (max-width: 639px) {
+  .wallet-sheet {
+    margin: auto var(--gutter) var(--gutter);
+  }
+}
+.name-input {
+  background: var(--card);
+  border: 0;
+  padding: var(--space-3);
+  width: 100%;
+}
+.app-error {
+  margin-block: var(--space-4);
+}
+.contract-list {
+  list-style: none;
+  display: grid;
+  gap: var(--space-4);
+}
+.stat__value {
+  overflow-wrap: anywhere;
+}
+.card,
+.panel,
+.stack,
+.field,
+.status__side {
+  min-width: 0;
+}
+.btn:disabled {
+  cursor: not-allowed;
+}
+.form-actions-top {
+  margin-block: var(--space-3);
+}
+.status-strip .test-run {
+  width: 100%;
+}
+.tx-details {
+  overflow-wrap: anywhere;
+}
+.main > .stack {
+  min-width: 0;
+}
+.share-workbench {
+  max-width: 1200px;
+}
+.share-export {
+  width: 1200px;
+  position: fixed;
+  left: -20000px;
+  top: 0;
+  pointer-events: none;
+}
+.page-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.token-note {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+.table-wrap .table {
+  min-width: 0;
+}
+.subnav a,
+.site-footer a {
+  display: inline-flex;
+  min-height: var(--target);
+  align-items: center;
+}
+.letter-data {
+  max-height: 12rem;
+  overflow: auto;
+  padding: var(--space-3);
+  border: var(--bw-thin) solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper-2);
+  overflow-wrap: anywhere;
+}
+.hero-line {
+  display: block;
+}
+.no-motion *,
+.no-motion *::before,
+.no-motion *::after {
+  transition: none !important;
+}
+.claim-input {
+  font-size: var(--text-md);
+}
+/* The pinned kit's stamp landing is the only animation. Button presses remain immediate. */
+.btn,
+.icon-btn,
+.wallet-btn,
+.chip {
+  transition: none;
+}
+.addr > a {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+}
+.wall-card {
+  transition: none;
+}
+/* The existing 22/18 px scale fits pathological wide-glyph text in a fixed export. */
+.share-card__text.is-dense {
+  font-size: calc(22 * var(--u));
+}
+.share-card__text.is-dense-more {
+  font-size: calc(18 * var(--u));
+}
+/* From the pinned share-cards.html page's own style block. */
+.share-card__objection {
+  display: grid;
+  justify-items: end;
+  gap: calc(10 * var(--u));
+  font-size: calc(22 * var(--u));
+  font-weight: var(--w-bold);
+  line-height: 1.25;
+  color: var(--ink-2);
+  text-align: right;
+}
+.plea__text,
+.wall-card__text,
+.share-card__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The status-page mobile ordering from the pinned page mockup. */
+@media (max-width: 1099px) {
+  .status__side {
+    display: contents;
+  }
+  .status__sell {
+    order: -1;
+  }
+}
+@media (min-width: 1100px) {
+  .status__side {
+    align-self: stretch;
+  }
+  .status__side > :last-child {
+    flex-grow: 1;
+  }
+}
+.site-footer nav a {
+  min-width: var(--target);
+  justify-content: center;
+}

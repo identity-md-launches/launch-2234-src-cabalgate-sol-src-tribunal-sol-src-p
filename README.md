@@ -1,5 +1,13 @@
 # PLEA
 
+## Sepolia test run 9 website
+
+The launch #2234 frontend is in **[web/](web/)**, with the complete static export in **[dist/](dist/)**. It reads the supplied run 9 deployment at runtime; no contracts were changed or deployed. The historical contract notes below remain intact.
+
+See **[FRONTEND.md](FRONTEND.md)** for installation, preview, configuration and action flows, **[DESIGN.md](DESIGN.md)** for the pinned visual system, and **[VALIDATION.md](VALIDATION.md)** for browser and interaction results.
+
+---
+
 **A sell-gated meme token on Uniswap v4.** Anyone can buy. To sell, you write a plea, and **the Cabal** decides. The Cabal is a panel of 30 IdentityMD oracle judges that scores each plea from 0 to 45. While the Cabal lives, approved pleas also compete in **seasons** for IMD and PLEA prizes. If the Cabal goes 33 hours without a verdict, it dies, and PLEA trades freely forever.
 
 Launched through the IMD swarm straight from this repository (`launch.open` with `repoUrl` + `baseCommit`). The final code is live on Sepolia as run 8.5 (IMD launch #1981), and Ethereum mainnet is next: see [Status](#status).

@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "launchId": "544c0ace-4f80-4067-ac5f-9b7c590669c0",
+  "chainId": 11155111,
+  "repoUrl": "https://github.com/identity-md-launches/launch-2234-src-cabalgate-sol-src-tribunal-sol-src-p",
+  "sourceCommit": "9f58da6e57221261c71630fbe9d342e87395de1c",
+  "attestationHash": "77c9b695a0961815a93ddea633dd154c03f61e20b2536d4ceeddb99e4afe0f99",
+  "manifest": {
+    "kind": "evm_contracts",
+    "contracts": [
+      {
+        "contract": "PLEA",
+        "constructorArgs": [
+          "$owner"
+        ]
+      },
+      {
+        "contract": "CabalGate",
+        "constructorArgs": [
+          "$contract:PLEA",
+          "0xa43e6F75ee006411F79Ac1C84120606C2330DE82",
+          "0x56bcf2a5F47710649A4091219Ef0b56e2d1B58BF",
+          "0x56bcf2a5F47710649A4091219Ef0b56e2d1B58BF",
+          "0x5598Aa9146215Bc13eb26f2c692Ad1461Fd32982",
+          "18000",
+          "118800"
+        ]
+      },
+      {
+        "contract": "Seasons",
+        "constructorArgs": [
+          "$contract:PLEA",
+          "$contract:CabalGate",
+          "0x56bcf2a5F47710649A4091219Ef0b56e2d1B58BF",
+          "0xa0443799c320E16C80801c9C1911F3571260287F"
+        ]
+      },
+      {
+        "contract": "PleaDistributor",
+        "constructorArgs": [
+          "$contract:PLEA",
+          "$owner"
+        ]
+      },
+      {
+        "contract": "PleaLaunch",
+        "constructorArgs": [
+          "$contract:PLEA",
+          "$contract:CabalGate",
+          "$contract:Seasons",
+          "$contract:PleaDistributor",
+          "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543",
+          "0x56bcf2a5F47710649A4091219Ef0b56e2d1B58BF",
+          "0x0457276D7b036818B3EddC1A4A3FCeda61e9314d",
+          "1300000",
+          "1792594800",
+          "0x56bcf2a5F47710649A4091219Ef0b56e2d1B58BF",
+          "0",
+          "0xd3371a7f985211e18339f476d2f56e7bd478b585aec574558c6bc3af40d8c8d5",
+          "0x4869267458c34ec220c42b46c12246890825e504a335dde33bde75b7e5c47274"
+        ]
+      }
+    ],
+    "notes": "PLEA test run 9 on Sepolia (chain 11155111): the final code with imdTEST as both the pool currency and the oracle fee, as IMD's Sepolia Intake sells oracle questions only in imdTEST since 2026-10-18 (the earlier open-mint test IMD is priced at 0). Run 7's code (testnet7 @ e1755aa, launch #1843: letters without the 0.35 IMD auto-sell fee, LetterTooLong(bytes, 280), the 1.2x seat multiplier read from Seasons' fourth argument with a gas-capped staticcall, the 15-day cap ratchet, PleaDistributor Ownable2Step) plus IMD's run-7 CabalGate size refactor, the two fixes of run 7's launch audit (the Letterbox delivery floor after the hook's sale fees; Tribunal.standing checks the seller's exclusion first), the fixes of audit rounds 5-8 (exact profit band edges; a second objector may file while the first objection is pending; PleaLaunch checks the Letterbox's oracle fee settings and hash, and seed waits for the Letterbox and the Tribunal; Tribunal.status counts the seat multiplier; a plea larger than the buy record takes the PLEA-weighted mean of the record's and the received-PLEA facts; the text checks refuse every Unicode format, variation-selector and default-ignorable character; PLEA a trim cannot take before the seller settles is burned from claims at rebalance; a buy's fee refund comes after its payouts; a Stacker credit that fails falls back to plain-IMD cashback; the seed's dust burn is counted), the two fixes of run 8.5's launch audit (exact share band edges; the seat word's EIP-55 case), the owner's fee at 1% (2.25% in all), the wall guard at 700 ticks a day, and the run-8 numbers: the fact score is 0-45 (share sold at most 20%: 16, 35%: 9, more: 3; held 7 days: 7, 3: 4, 1: 2; at a loss: 13, gain at most 50%: 12, 200%: 10, 500%: 8, 1,000%: 6, more: 4; PLEA no buy record covers: held since trading opened, profit 10; 24h trend up: 9, flat: 5, down: 0), the need is 71 minus it (CannotPass above 45), the judges' 0-45 scale and definitions are unchanged, and a letter pleads 20% of the writer's PLEA. Deploy exactly PLEA, CabalGate, Seasons, PleaDistributor and PleaLaunch in the listed order, with zero ETH, in one atomic factory transaction. PLEA and PleaDistributor receive $owner; PleaLaunch reads its owner from PLEA and registers the system during construction. Atomic deployment prevents another caller from taking PLEA's deployment-block registration window. CabalGate's arguments specify Intake v2, imdTEST as the oracle fee asset and as the pool IMD, the attestation signer, 18000-second seasons and a 118800-second dead-man. Seasons takes the same imdTEST and the seat NFT. PleaLaunch specifies the Sepolia v4 PoolManager, imdTEST, imd/acc's Sepolia Stacker (it stakes the earlier test IMD, so its credit reverts and the hook pays the 0.5% cashback in plain imdTEST), credit gas 1300000, START 1792594800 (2026-10-21 15:00 UTC) and imdTEST as the oracle fee asset. The static bool word 0: nothing is minted; the Letterbox buys the oracle fee and the tip with the writer's PLEA. PleaLaunch's 12th and 13th arguments are the keccak256 hashes of the accepted build's argument-free Letterbox and Tribunal creation code; the nonzero Tribunal commitment enables Objection!. Letterbox, Tribunal and PleaHook are deployed after this five-contract transaction through PleaLaunch's committed-code functions, not as manifest calls; the hook needs a mined flag-compatible CREATE2 salt and mints 82% of PLEA to the hook, 6% to Seasons and 12% to PleaDistributor, whose owner sets one Merkle root for the swarm's 10% and the 2% airdrop. Seasons pays the top 25 wallets with at least 60 points (shareBps for IMD and the 10000000 PLEA bonus of each of the first six seasons). Trading opens through seed() once the hook, the Letterbox and the Tribunal exist: PLEA's owner may call any time, anyone from START."
+  },
+  "contracts": [
+    {
+      "name": "PLEA",
+      "address": "0xb9efaa7b64232d31db23ee6902972a58f492ee8b",
+      "txHash": "0xdcaabab34b79b3aa49bf30261516e02eee09a0fd15b85b5372d7445e3e375541",
+      "blockNumber": 11948819,
+      "creationCodeHash": "e962dfc1b78fdbf0a5d7855afaaaa79c41e1b7439d828ee188a4e26b8fedcf1c",
+      "abiHash": "e0a4eaf3d9d87e8246437072b3a3a432d800889afc87b7f410ca42d3624baf14"
+    },
+    {
+      "name": "CabalGate",
+      "address": "0x78c77e3ddbc5a45daca98cafa2b2896da3104e4a",
+      "txHash": "0xdcaabab34b79b3aa49bf30261516e02eee09a0fd15b85b5372d7445e3e375541",
+      "blockNumber": 11948819,
+      "creationCodeHash": "fbc7fa4588765bb5e017d9d78d1521c500e3ca9e380bd75d9c3b97e5243eb53e",
+      "abiHash": "7fa2541974c4e8a0f9be33bbbee993214bfc3d091cd43321e97bec56e42e3588"
+    },
+    {
+      "name": "Seasons",
+      "address": "0x8dd85a978dbd7b2cff9247c7e3ad49cf8920f0c6",
+      "txHash": "0xdcaabab34b79b3aa49bf30261516e02eee09a0fd15b85b5372d7445e3e375541",
+      "blockNumber": 11948819,
+      "creationCodeHash": "060cc73c60760b67b209a63cc5a96f2c116372e162936a15b65c2084afd4e07b",
+      "abiHash": "8bcb1b7d7e4669b9f696c7ada7d9e3afda16fd86195d0b36dcc407c06e40cc9f"
+    },
+    {
+      "name": "PleaDistributor",
+      "address": "0x2fdf098680cb4b515a8e43f09b3bec5493656a46",
+      "txHash": "0xdcaabab34b79b3aa49bf30261516e02eee09a0fd15b85b5372d7445e3e375541",
+      "blockNumber": 11948819,
+      "creationCodeHash": "8e974265a2c7f92e682e1e60bae72362e23f9f1920721417f6a8f501c4d7cafb",
+      "abiHash": "d916070fae0d24172c3915e33b6948ce7597d83fea4b88c2bf5ba034820b4b7d"
+    },
+    {
+      "name": "PleaLaunch",
+      "address": "0x3621606cddc23e69d1115126522b53fbf788761e",
+      "txHash": "0xdcaabab34b79b3aa49bf30261516e02eee09a0fd15b85b5372d7445e3e375541",
+      "blockNumber": 11948819,
+      "creationCodeHash": "d40a29fa0058a0fd1e19da76ba132dbc75b529a69853ddd96773274937382c09",
+      "abiHash": "d9440de090267c9bf85c4b0c971b6ae9c492606fb334ed0b99221100d201def0"
+    }
+  ],
+  "abiInstructions": "Build ABIs from this exact source commit; compare canonicalKeccak(abi) with abiHash. Verify deployed code on the stated chain before enabling transactions."
+}

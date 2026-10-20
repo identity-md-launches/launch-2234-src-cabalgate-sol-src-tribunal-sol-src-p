@@ -1,0 +1,175 @@
+/* PLEA design tokens (neo-brutal docket). The source of truth for colour, type, space, borders,
+   radii, shadows and motion. Light is the default (the user's pick); dark is html[data-theme="dark"],
+   set by the theme toggle and remembered in localStorage "plea-theme". Every text pair here is at least 4.5:1
+   (tools/contrast.py checks them all). Fonts: Archivo (variable, wdth 62-125) and IBM Plex Mono,
+   both SIL OFL 1.1; the site self-hosts them as woff2. */
+
+:root {
+  color-scheme: light;
+
+  /* Ground and ink */
+  --paper: #FBF6EA;          /* page ground */
+  --paper-2: #F3EDDD;        /* sunken: read-only fields, table heads, skeletons */
+  --card: #FFFFFF;           /* cards, panels, inputs */
+  --ink: #121212;            /* text, outlines, hard shadows */
+  --ink-2: #4A463E;          /* secondary text (8.7:1 on paper) */
+  --ink-3: #6B665B;          /* tertiary text, placeholders (4.9:1 on paper-2) */
+  --line-soft: #D9D2C1;      /* dividers inside a card (decorative only) */
+
+  /* Action: the one colour for "do this"; never a state */
+  --action: #FFD92E;
+  --action-hover: #FFCF00;
+  --action-soft: #FFF3B0;    /* your row, selection */
+  --on-action: #121212;
+
+  /* Verdict states: flat fills with ink text in both themes. The stamp always says the
+     state in words, and pending/lapsed differ in pattern too, so colour is never the only signal. */
+  --approved: #4BE08F;
+  --denied: #FF5A4E;
+  --pending: #FFC247;
+  --pending-2: #FFE08A;      /* second stripe */
+  --noverdict: #C9C3B6;
+  --executed: #6FA8FF;       /* SOLD */
+  --objection: #C8A6FF;      /* OBJECTION / SUSTAINED / OVERRULED */
+  --on-state: #121212;
+  --night: #121212;          /* always dark */
+  --day: #FFFFFF;            /* always light */
+  /* The urgent pair (the 7-minute sell window and its Sell now button): the loudest box in each theme. */
+  --urgent-bg: #121212;
+  --urgent-ink: #FFFFFF;
+  --urgent-digits: #FFD92E;
+
+  /* State colours used as text on cards (points, errors) */
+  --approved-text: #137A3E;
+  --denied-text: #C2271C;
+
+  /* Focus: a thick ink ring set off the element, visible on every fill (--focus-ring below) */
+  --focus-offset: 3px;
+  --focus: #1F4FE0;          /* blue ring: never an outline, a shadow or a state colour (6.0:1 on paper) */
+
+  /* Type */
+  --font-body: "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif; /* used with --display-stretch */
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --display-stretch: 125%;
+  --display-weight: 800;
+
+  --text-xs: 0.75rem;    /* 12px labels, meta, badges */
+  --text-sm: 0.875rem;   /* 14px secondary, table cells */
+  --text-md: 1rem;       /* 16px body */
+  --text-lg: 1.125rem;   /* 18px plea text on cards, lead */
+  --text-xl: 1.375rem;   /* 22px card titles, large stamp */
+  --text-2xl: clamp(1.375rem, 1.1rem + 1.2vw, 1.75rem);   /* 22-28px section headings (always under the page title) */
+  --text-3xl: clamp(1.75rem, 1.25rem + 2vw, 2.25rem);  /* 28-36px page titles */
+  --text-hero: clamp(2.25rem, 1.25rem + 4.2vw, 3.5rem); /* 36-56px home only */
+
+  --lh-tight: 1.1;
+  --lh-snug: 1.3;
+  --lh-body: 1.5;
+
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-bold: 600;
+  --w-heavy: 800;
+
+  /* Space: one 4px-based scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* Layout: 4 / 8 / 12 columns at 360 / 768 / 1280 px */
+  --page-max: 1200px;
+  --gutter: 16px;
+  --col-gap: 16px;
+  --measure: 65ch;
+  --target: 44px;            /* minimum touch target */
+
+  /* Borders and radii */
+  --bw-thin: 2px;            /* pills, badges, dividers */
+  --bw: 3px;                 /* cards, buttons, inputs, stamps */
+  --radius-sm: 4px;          /* stamps, badges */
+  --radius-md: 8px;          /* buttons, inputs */
+  --radius-lg: 12px;         /* cards, panels */
+  --radius-pill: 999px;
+
+  /* Hard offset shadows, no blur (--shadow-sm/md/lg below). Only on what you can press, on cards
+     and on the stamp. */
+
+  /* Motion: one authored moment (the stamp lands) plus the button press */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);   /* exponential ease-out, no bounce */
+  --dur-press: 90ms;
+  --dur-fast: 150ms;
+  --dur-stamp: 420ms;
+  --stamp-tilt: -3deg;
+
+  --z-nav: 20;
+  --z-drawer: 30;
+  --z-toast: 40;
+}
+
+/* Derived tokens: declared on every theme scope so they re-resolve against that scope's colours. */
+:root, .theme-light, .theme-dark {
+  --line: var(--ink);        /* outlines of cards, buttons, inputs */
+  --shadow-color: var(--ink);
+  --lapsed: var(--card);     /* LAPSED is a dashed outline with no fill */
+  --stripes: repeating-linear-gradient(-45deg, var(--pending) 0 8px, var(--pending-2) 8px 16px);
+  --focus-ring: 3px solid var(--focus);
+  --shadow-sm: 3px 3px 0 var(--shadow-color);
+  --shadow-md: 4px 4px 0 var(--shadow-color);
+  --shadow-lg: 6px 6px 0 var(--shadow-color);
+}
+
+/* A light island inside a dark page (gallery, share cards). */
+.theme-light {
+  color-scheme: light;
+  --focus: #1F4FE0;
+  --urgent-bg: #121212;
+  --urgent-ink: #FFFFFF;
+  --urgent-digits: #FFD92E;
+  --paper: #FBF6EA;
+  --paper-2: #F3EDDD;
+  --card: #FFFFFF;
+  --ink: #121212;
+  --ink-2: #4A463E;
+  --ink-3: #6B665B;
+  --line-soft: #D9D2C1;
+  --action-soft: #FFF3B0;
+  --approved-text: #137A3E;
+  --denied-text: #C2271C;
+}
+
+@media (min-width: 768px) {
+  :root { --gutter: 24px; --col-gap: 24px; }
+}
+@media (min-width: 1280px) {
+  :root { --gutter: 32px; }
+}
+
+/* Dark: warm near-black paper, cream ink. Fills keep ink text (--on-state). */
+:root[data-theme="dark"], .theme-dark {
+  color-scheme: dark;
+  --focus: #FFD92E;          /* yellow ring on the dark ground (11:1) */
+  --shadow-color: #5E5644;   /* a darker block than the cream outline, so depth doesn't read as a glow */
+  --urgent-bg: #FFD92E;
+  --urgent-ink: #121212;
+  --urgent-digits: #121212;
+  --paper: #17150F;
+  --paper-2: #201D16;
+  --card: #26221A;
+  --ink: #F5F0E4;
+  --ink-2: #C9C1AE;
+  --ink-3: #A89F8B;
+  --line-soft: #4A4436;
+  --action-soft: #3D3519;
+  --approved-text: #4BE08F;
+  --denied-text: #FF8A80;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-press: 0ms; --dur-fast: 0ms; --dur-stamp: 0ms; }
+}
