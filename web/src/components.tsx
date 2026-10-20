@@ -902,14 +902,24 @@ export function ObjectionStamps({ p }: { p: Plea }) {
     </>
   );
 }
-export function PleaCard({ p, detail = false }: { p: Plea; detail?: boolean }) {
+export function PleaCard({
+  p,
+  detail = false,
+  missedSeason = false,
+}: {
+  p: Plea;
+  detail?: boolean;
+  missedSeason?: boolean;
+}) {
   const { s, now } = useApp(),
     { address } = useAccount(),
     prefix = useId(),
     state = pleaState(p, now, s!),
     earns = [2, 4, 5].includes(p.status) && !p.excluded && !p.standing?.[1];
   const pts = earns
-      ? `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}`
+      ? missedSeason
+        ? "not recorded before the season closed"
+        : `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}`
       : "no points",
     window = Number(con(s, "CabalGate.EXECUTE_WINDOW")),
     appeal = s?.logs.find(

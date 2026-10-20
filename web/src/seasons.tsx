@@ -12,6 +12,7 @@ import {
   getPlea,
   type Plea,
   amount,
+  verdictSeason,
 } from "./chain";
 import {
   Action,
@@ -124,9 +125,12 @@ function SeasonView({ season }: { season: bigint }) {
           return { ...e, name, best, seat, excluded };
         }),
       );
-      const best = address
-        ? await read("Seasons", "bestOf", [season, address])
-        : [0, 0, 0];
+      const [best, seatHeld] = address
+        ? await Promise.all([
+            read("Seasons", "bestOf", [season, address]),
+            read("Seasons", "holdsSeat", [address]),
+          ])
+        : [[0, 0, 0], false];
       const eligibleLogs = s!.logs.filter(
         (l) => l.eventName === "Verdict" && l.args.approved,
       );
@@ -155,7 +159,7 @@ function SeasonView({ season }: { season: bigint }) {
           !p.standing?.[1] &&
           seasonOf(p) === season,
       );
-      return { rows, best, own, closeIds };
+      return { rows, best, own, closeIds, seatHeld };
     },
     [
       String(season),
@@ -173,9 +177,10 @@ function SeasonView({ season }: { season: bigint }) {
     }) as Promise<any>;
   }
   function seasonOf(p: Plea) {
-    return (
-      (p.verdictAt - BigInt(val(s, "CabalGate.startedAt"))) /
-      BigInt(con(s, "Seasons.SEASON"))
+    return verdictSeason(
+      p.verdictAt,
+      BigInt(val(s, "CabalGate.startedAt")),
+      BigInt(con(s, "Seasons.SEASON")),
     );
   }
   const fundedTx = s!.logs
@@ -232,8 +237,7 @@ function SeasonView({ season }: { season: bigint }) {
           : 0n),
       0n,
     );
-  const seatHeld =
-    rows[rank]?.seat || s!.pleas.find((p) => equal(p.seller, address))?.seat;
+  const seatHeld = query.data?.seatHeld;
   const sums = (values: number[]) =>
     values.join(" + ") + " = " + values.reduce((a, b) => a + Number(b), 0);
   const judgeScores = (wallet: string, values: number[]) =>
@@ -382,7 +386,7 @@ function SeasonView({ season }: { season: bigint }) {
               <Costs
                 rows={[
                   ["Best three", sums(best)],
-                  ...(seatHeld
+                  ...(seatHeld && points > 0
                     ? [
                         [
                           "Judges’ scores, before × 1.2",
@@ -410,36 +414,45 @@ function SeasonView({ season }: { season: bigint }) {
                 );
                 return (
                   <div className="stack" key={String(p.id)}>
-                    {p.standing?.[0] && (
-                      <>
-                        <Notice
-                          title={`Plea #${p.id}’s +${p.points} points are held until ${clock(until)}.`}
-                        >
-                          <p>
-                            Record them after objections close. Nothing records
-                            them by itself.
-                          </p>
-                        </Notice>
-                        <div>
-                          <Countdown
-                            until={until}
-                            label="Objections close in"
-                          />
-                        </div>
-                      </>
+                    {data.closed ? (
+                      <p>
+                        Season {season + 1n} is closed; these points were not
+                        recorded.
+                      </p>
+                    ) : (
+                      p.standing?.[0] && (
+                        <>
+                          <Notice
+                            title={`Plea #${p.id}’s +${p.points} points are held until ${clock(until)}.`}
+                          >
+                            <p>
+                              Record them after objections close. Nothing
+                              records them by itself.
+                            </p>
+                          </Notice>
+                          <div>
+                            <Countdown
+                              until={until}
+                              label="Objections close in"
+                            />
+                          </div>
+                        </>
+                      )
                     )}
-                    <TxButton
-                      name="Seasons"
-                      fn="record"
-                      args={[p.id]}
-                      label="Record my points"
-                      disabled={!!p.standing?.[0] || data.closed}
-                      reason={
-                        p.standing?.[0]
-                          ? `Record your +${p.points} points after ${clock(until)}, when objections on plea #${p.id} close. Nothing records them by itself: anyone can press Record my points.`
-                          : undefined
-                      }
-                    />
+                    {!data.closed && (
+                      <TxButton
+                        name="Seasons"
+                        fn="record"
+                        args={[p.id]}
+                        label="Record my points"
+                        disabled={!!p.standing?.[0] || data.closed}
+                        reason={
+                          p.standing?.[0]
+                            ? `Record your +${p.points} points after ${clock(until)}, when objections on plea #${p.id} close. Nothing records them by itself: anyone can press Record my points.`
+                            : undefined
+                        }
+                      />
+                    )}
                   </div>
                 );
               })}

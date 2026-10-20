@@ -45,9 +45,16 @@ export type Snapshot = {
   constants: Record<string, any>;
   logs: any[];
   pleas: Plea[];
+  court: CourtHistory;
   block: bigint;
   timestamp: number;
   historyError?: string;
+};
+export type CourtHistory = {
+  pending: Plea[];
+  open: Plea[];
+  latestVerdict?: Plea;
+  verdictTimes: Record<string, number>;
 };
 export const read = (r: Runtime, name: string, fn: string, args: any[] = []) =>
   r.client.readContract({
@@ -328,7 +335,7 @@ export async function readSnapshot(
     ];
   } catch {
     historyError =
-      "History could not be read completely. Try again; cashback totals are hidden until the scan completes.";
+      "History could not be read completely. Try again; court and cashback totals are hidden until the scan completes.";
   }
   const next = v["CabalGate.nextId"];
   const ids = Array.from(
@@ -336,6 +343,14 @@ export async function readSnapshot(
     (_, i) => next - 1n - BigInt(i),
   );
   const pleas = await Promise.all(ids.map((id) => getPlea(r, id, logs)));
+  const court = await readCourtHistory(
+    r,
+    logs,
+    pleas,
+    constants,
+    Number(block.timestamp),
+    previous,
+  );
   const objectionCount = Number(v["Tribunal.nextId"] - 1n);
   const objections = await Promise.all(
     Array.from({ length: Math.min(objectionCount, 64) }, async (_, i) => {
@@ -361,12 +376,123 @@ export async function readSnapshot(
     constants,
     logs,
     pleas,
+    court,
     block: historyError
       ? (previous?.block ?? APP.eventStart - 1n)
       : block.number,
     timestamp: Number(block.timestamp),
     historyError,
   };
+}
+// Card pagination is independent of the active court and whole-history totals.
+export async function readCourtHistory(
+  r: Runtime,
+  logs: any[],
+  recent: Plea[],
+  constants: Record<string, any>,
+  now: number,
+  previous?: Pick<Snapshot, "court">,
+): Promise<CourtHistory> {
+  const verdicts = logs.filter((l) => l.eventName === "Verdict"),
+    terminal = new Set(
+      logs
+        .filter((l) =>
+          ["Verdict", "PleaFailed", "PleaExpired"].includes(l.eventName),
+        )
+        .map((l) => l.args.id as bigint),
+    ),
+    page = new Map(recent.map((p) => [p.id, p])),
+    full = new Map(recent.map((p) => [p.id, Promise.resolve(p)]));
+  const load = (id: bigint) => {
+    if (!full.has(id)) full.set(id, getPlea(r, id, logs));
+    return full.get(id)!;
+  };
+  const cached = new Map(previous?.court.pending.map((p) => [p.id, p])),
+    expiry = Number(constants["CabalGate.PENDING_EXPIRY"]),
+    pendingIds = [
+      ...new Set<bigint>(
+        logs
+          .filter(
+            (l) => l.eventName === "PleaSubmitted" && !terminal.has(l.args.id),
+          )
+          .map((l) => l.args.id),
+      ),
+    ];
+  const pending = await Promise.all(
+    pendingIds.map(async (id) => {
+      if (page.has(id)) return page.get(id)!;
+      const old = cached.get(id);
+      // Completion cannot be undone; submission time is immutable after expiry.
+      if (old && (old.completed || now > Number(old.submittedAt) + expiry))
+        return old;
+      return { ...(await readPlea(r, id)), id } as Plea;
+    }),
+  );
+  const last = verdicts.at(-1),
+    latestVerdict = last ? await load(last.args.id) : undefined,
+    verdictTimes = { ...previous?.court.verdictTimes },
+    window = Number(constants["Tribunal.OBJECTION_WINDOW"]),
+    openIds: bigint[] = [];
+  // Logs are in chain order. Stop at the first verdict outside the window,
+  // caching block times so settled history is never re-scanned through RPC.
+  for (const log of verdicts.slice().reverse()) {
+    const key = String(log.blockNumber);
+    if (verdictTimes[key] === undefined) {
+      const known =
+        page.get(log.args.id) ||
+        (latestVerdict?.id === log.args.id ? latestVerdict : undefined);
+      verdictTimes[key] = known
+        ? Number(known.verdictAt)
+        : Number(
+            (await r.client.getBlock({ blockNumber: log.blockNumber }))
+              .timestamp,
+          );
+    }
+    if (now > verdictTimes[key] + window) break;
+    if (log.args.approved) openIds.push(log.args.id);
+  }
+  const open = (await Promise.all([...new Set(openIds)].map(load))).filter(
+    (p) => [2, 4, 5].includes(p.status),
+  );
+  return { pending, open, latestVerdict, verdictTimes };
+}
+export function courtCounts(s: Snapshot | undefined, now: number) {
+  if (!s || s.historyError) return undefined;
+  const verdicts = new Map<bigint, boolean>(
+    s.logs
+      .filter((l) => l.eventName === "Verdict")
+      .map((l) => [l.args.id, l.args.approved]),
+  );
+  const total = Number(s.v["CabalGate.nextId"] - 1n),
+    approved = [...verdicts.values()].filter(Boolean).length,
+    denied = verdicts.size - approved,
+    pending = s.court.pending.filter(
+      (p) =>
+        p.status === 1 &&
+        !p.completed &&
+        now <=
+          Number(p.submittedAt) +
+            Number(s.constants["CabalGate.PENDING_EXPIRY"]),
+    ).length;
+  return {
+    total,
+    approved,
+    denied,
+    pending,
+    noVerdict: total - approved - denied - pending,
+  };
+}
+export function verdictSeason(
+  verdictAt: bigint,
+  startedAt: bigint,
+  length: bigint,
+) {
+  return verdictAt > 0n &&
+    startedAt > 0n &&
+    verdictAt >= startedAt &&
+    length > 0n
+    ? (verdictAt - startedAt) / length
+    : undefined;
 }
 export const val = (s: Snapshot | undefined, name: string) => s?.v[name];
 export const con = (s: Snapshot | undefined, name: string) =>

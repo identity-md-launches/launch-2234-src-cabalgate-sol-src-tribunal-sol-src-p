@@ -16,6 +16,7 @@ import {
   soldFor,
   objectionLine,
   con,
+  courtCounts,
   duration,
   elapsed,
   getPlea,
@@ -25,6 +26,7 @@ import {
   tokenAmount,
   utc,
   val,
+  verdictSeason,
   type Plea,
 } from "./chain";
 import {
@@ -91,35 +93,15 @@ export function Wall() {
           Number(b.id - a.id),
     );
   const total = Number(val(s, "CabalGate.nextId") || 1n) - 1,
-    approved =
-      s?.logs.filter((l) => l.eventName === "Verdict" && l.args.approved)
-        .length || 0,
-    denied =
-      s?.logs.filter((l) => l.eventName === "Verdict" && !l.args.approved)
-        .length || 0,
-    pending =
-      s?.logs.filter(
-        (l) =>
-          l.eventName === "PleaSubmitted" &&
-          !s.logs.some(
-            (e) =>
-              ["Verdict", "PleaFailed", "PleaExpired"].includes(e.eventName) &&
-              e.args.id === l.args.id,
-          ) &&
-          now <=
-            Number(
-              s.v.submissionTimes?.[String(l.args.id)] ||
-                all.find((p) => p.id === l.args.id)?.submittedAt ||
-                0,
-            ) +
-              Number(con(s, "CabalGate.PENDING_EXPIRY")),
-      ).length || 0;
-  const counts: Record<string, number> = {
+    court = courtCounts(s, now),
+    approved = court?.approved || 0,
+    denied = court?.denied || 0;
+  const counts: Record<string, number | string> = {
     All: total,
-    Approved: approved,
-    Denied: denied,
-    Pending: pending,
-    "No verdict": total - approved - denied - pending,
+    Approved: court?.approved ?? "—",
+    Denied: court?.denied ?? "—",
+    Pending: court?.pending ?? "—",
+    "No verdict": court?.noVerdict ?? "—",
   };
   async function loadMore() {
     if (busy || oldest <= 1n) return;
@@ -539,15 +521,38 @@ export function PleaPage({ id }: { id: string }) {
   const { r, s, now } = useApp();
   const { address } = useAccount();
   const number = /^\d+$/.test(id) ? BigInt(id) : 0n;
+  const loaded =
+    s?.pleas.find((p) => p.id === number) ||
+    s?.court.open.find((p) => p.id === number) ||
+    (s?.court.latestVerdict?.id === number ? s.court.latestVerdict : undefined);
   const query = useRead(
     () => getPlea(r, number, s?.logs),
     [id],
-    !!s &&
-      number > 0n &&
-      number < val(s, "CabalGate.nextId") &&
-      !s.pleas.some((p) => p.id === number),
+    !!s && number > 0n && number < val(s, "CabalGate.nextId") && !loaded,
   );
-  let p = s?.pleas.find((p) => p.id === number) || query.data;
+  const p = loaded || query.data;
+  const recordSeason =
+    p && s
+      ? verdictSeason(
+          p.verdictAt,
+          BigInt(val(s, "CabalGate.startedAt")),
+          BigInt(con(s, "Seasons.SEASON")),
+        )
+      : undefined;
+  const knownClosed =
+    recordSeason === undefined
+      ? undefined
+      : s?.v.seasons[String(recordSeason)]?.closed;
+  const recordSeasonQuery = useRead(
+    () => read(r, "Seasons", "closed", [recordSeason]),
+    [recordSeason?.toString()],
+    !!p &&
+      [2, 4, 5].includes(p.status) &&
+      !p.recorded &&
+      recordSeason !== undefined &&
+      knownClosed === undefined,
+  );
+  const seasonClosed = knownClosed ?? recordSeasonQuery.data;
   const saleQuote = useRead(
     async () => {
       if (!p) return 0n;
@@ -625,7 +630,15 @@ export function PleaPage({ id }: { id: string }) {
   const minOut = (net * 99n) / 100n;
   const canSell = p.status === 2 && now <= sellUntil;
   const auto = (p.flags & 2) > 0;
-  const held = !p.excluded && !p.standing?.[1] && !!p.standing?.[0];
+  const missedSeason =
+    approved &&
+    !p.recorded &&
+    !p.excluded &&
+    !p.standing?.[1] &&
+    seasonClosed === true;
+  const closedMessage = `Season ${String((recordSeason ?? 0n) + 1n)} is closed; these points were not recorded.`;
+  const held =
+    !missedSeason && !p.excluded && !p.standing?.[1] && !!p.standing?.[0];
   const settled = p.escrow && !p.escrow[1];
   const appealId = s.logs.find(
     (l) => l.eventName === "PleaSubmitted" && l.args.originalId === p.id,
@@ -656,7 +669,9 @@ export function PleaPage({ id }: { id: string }) {
                   : state === "UPHELD"
                     ? "The denial was upheld. No further appeal."
                     : state === "LAPSED"
-                      ? "The approval lapsed unsold; its points still count."
+                      ? missedSeason
+                        ? "The approval lapsed unsold."
+                        : "The approval lapsed unsold; its points still count."
                       : "The Cabal denied this plea."}{" "}
         {held
           ? `The +${p.points} points are held while objections are open; record them after ${clock(objectionUntil)}.`
@@ -666,8 +681,11 @@ export function PleaPage({ id }: { id: string }) {
       </p>
       <div className="split split--even status">
         <div className="stack status__plea">
-          <PleaCard p={p} detail />
-          <PleaTimeline p={p} />
+          <PleaCard p={p} detail missedSeason={missedSeason} />
+          <PleaTimeline
+            p={p}
+            missedSeason={missedSeason ? recordSeason : undefined}
+          />
           <Panel level={2} title="The judges">
             <Costs
               rows={[
@@ -828,7 +846,12 @@ export function PleaPage({ id }: { id: string }) {
                 )}
               </>
             ) : (
-              <SaleSummary p={p} state={state} appealId={appealId} />
+              <SaleSummary
+                p={p}
+                state={state}
+                appealId={appealId}
+                missedSeason={missedSeason}
+              />
             )}
             {p.status === 1 && state === "NO VERDICT" && !auto && (
               <TxButton
@@ -855,8 +878,11 @@ export function PleaPage({ id }: { id: string }) {
               <p className="stat__value">
                 {p.standing?.[1] || p.excluded
                   ? "No points"
-                  : `+${p.points} points ${p.recorded ? "recorded" : held ? "held" : "once recorded"}`}
+                  : missedSeason
+                    ? "Not recorded"
+                    : `+${p.points} points ${p.recorded ? "recorded" : held ? "held" : seasonClosed === undefined ? "· checking season" : "once recorded"}`}
               </p>
+              {missedSeason && <p>{closedMessage}</p>}
               {p.seat && (
                 <p className="small">
                   Seat multiplier ×
@@ -884,7 +910,8 @@ export function PleaPage({ id }: { id: string }) {
                   held ||
                   p.recorded ||
                   p.standing?.[1] ||
-                  p.excluded
+                  p.excluded ||
+                  seasonClosed !== false
                 }
                 reason={
                   p.excluded
@@ -893,9 +920,14 @@ export function PleaPage({ id }: { id: string }) {
                       ? "Already recorded"
                       : p.standing?.[1]
                         ? "An objection was sustained. This plea earns no points."
-                        : held
-                          ? "Points are held while the objection window is open or a panel is pending."
-                          : "Anyone may record these points. Nothing records them by itself."
+                        : missedSeason
+                          ? "Recording is closed for this season."
+                          : seasonClosed === undefined
+                            ? recordSeasonQuery.error ||
+                              "Reading this plea’s season status…"
+                            : held
+                              ? "Points are held while the objection window is open or a panel is pending."
+                              : "Anyone may record these points. Nothing records them by itself."
                 }
               />
             </Panel>
@@ -1257,7 +1289,7 @@ export function Objections() {
         BigInt(specific) < val(s, "CabalGate.nextId"),
     );
   const open =
-      s?.pleas
+      s?.court.open
         .filter(
           (p) =>
             [2, 4, 5].includes(p.status) &&
@@ -1266,7 +1298,9 @@ export function Objections() {
         )
         .sort((a, b) => Number(a.verdictAt - b.verdictAt)) || [],
     selected =
-      s?.pleas.find((p) => String(p.id) === specific) || requested.data,
+      s?.court.open.find((p) => String(p.id) === specific) ||
+      s?.pleas.find((p) => String(p.id) === specific) ||
+      requested.data,
     list = specific ? (selected ? [selected] : []) : open;
   const objections = (
     s?.v.objections ||
@@ -1524,10 +1558,12 @@ function SaleSummary({
   p,
   state,
   appealId,
+  missedSeason,
 }: {
   p: Plea;
   state: string;
   appealId?: bigint;
+  missedSeason: boolean;
 }) {
   const { s, now } = useApp(),
     delivered = s!.logs.find(
@@ -1567,7 +1603,9 @@ function SaleSummary({
                     "Points",
                     p.standing?.[1] || p.excluded
                       ? "none"
-                      : `+${p.points}${p.standing?.[0] ? " held" : ""}`,
+                      : missedSeason
+                        ? "not recorded; season closed"
+                        : `+${p.points}${p.standing?.[0] ? " held" : ""}`,
                   ],
                 ]
               : [
@@ -1577,7 +1615,11 @@ function SaleSummary({
                   ],
                   [
                     "Points",
-                    p.standing?.[1] || p.excluded ? "none" : `+${p.points}`,
+                    p.standing?.[1] || p.excluded
+                      ? "none"
+                      : missedSeason
+                        ? "not recorded; season closed"
+                        : `+${p.points}`,
                   ],
                 ]
           }
@@ -1600,12 +1642,19 @@ function SaleSummary({
           {clock(
             Number(p.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")),
           )}
-          . The {p.points} points still count for season{" "}
-          {Number(
-            (p.verdictAt - BigInt(val(s, "CabalGate.startedAt"))) /
-              BigInt(con(s, "Seasons.SEASON")),
-          ) + 1}
-          .
+          .{" "}
+          {missedSeason ? (
+            "Its points were not recorded before the season closed."
+          ) : (
+            <>
+              The {p.points} points still count for season{" "}
+              {Number(
+                (p.verdictAt - BigInt(val(s, "CabalGate.startedAt"))) /
+                  BigInt(con(s, "Seasons.SEASON")),
+              ) + 1}
+              .
+            </>
+          )}
         </p>
         {now < end && (
           <div>

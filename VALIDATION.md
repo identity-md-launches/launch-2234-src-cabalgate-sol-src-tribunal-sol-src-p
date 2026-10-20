@@ -1,5 +1,31 @@
 # Run 9 frontend validation
 
+## Independent review revision
+
+This section records the current bounded revision; the original run 9 validation below is retained as historical evidence, not claimed as a new run. All three findings in `.imd-responses.json` reproduced before implementation. No contract, dependency, build configuration, pinned design asset or ignore file changed.
+
+| Current check | Result |
+| --- | --- |
+| Before: history | Local fork, #1–32: approved #7 absent from Open now, present by direct link; Home/Wall showed 24 pending / 3 no verdict instead of 26 / 1. |
+| Before: seat | The no-history wallet’s `holdsSeat` returned true; positive seat notice count was zero. |
+| Before: season closed | `closed(0)=true`, `recorded(1)=false`; Record enabled and “+40 points once recorded” shown. Clicking failed simulation with `SeasonClosed`; zero broadcasts. |
+| After: targeted fork | `revision-court.mjs` passed: #7 open and latest, whole-history totals 4 approved / 1 denied / 26 pending / 1 no verdict, 24 initial cards then 32, positive seat notices. Unclosed-season Record is enabled and simulates successfully. Closed manual sale #1, sold appeal #3 and lapsed approval #4 show the missed recording deadline and disable Record. |
+| After: rendered fork matrix | **180 runs**, affected Home/Wall/Objections/Seasons/case states, 320/360/390/768/1280 px, light/dark, disconnected/connected. **0 horizontal overflows, 0 console/page errors, 0 axe WCAG 2.1 AA violations.** |
+| After: live read-only browser | **140 runs**, the existing 14-route × five-width × two-theme sweep; **0 failures, errors or axe violations**. The configured Sepolia reads used a test-side read-through; no public-chain write occurred. |
+| Final unit/type/build | `npm test`: **27/27**, including four new court-history/deadline/season-boundary regressions. `npm run typecheck` and `npm run build` passed against the unchanged lockfile. Existing upstream Vite directive/annotation warnings remain. |
+| Export | `check-export.mjs` verifies **27 assets, 1,340,144 bytes** (excluding manifest), all eight canonical ABI hashes, exact handoff/network blocks and final SHA-256 inventory. Relative asset paths and static hash routes remain intact. |
+| Taste probe | Required pinned `taste.mjs --out test/scratch/taste` ran on the final export: **13/16 checks pass**. Render, overflow/overlap/clipping, targets, measured contrast, copy, motion and metadata pass. The same three pinned-design exceptions remain: type sizes, weights, hard borders/shadows. |
+
+Better Interface coverage was reviewed on the affected states across all six domains. Accessibility: existing semantic controls/labels remain; closed Record stays focusable with an explanation and guards activation. Layout: the 180-run matrix and inspected 390/1280 screenshots show the restored older case and wrapped missed-deadline copy. Writing: removed the misleading closed-season promise from the points panel, timeline, detail card and sale summary. Typography/colors: existing tokens, fonts, scale and weights are unchanged; the probe measures solid contrast pairs successfully, with eight striped/image-backed boxes unmeasured. UI: page size, active-court discovery and actual recording eligibility now have separate state, with reads cached where their facts are immutable.
+
+Final finding locations: `web/src/chain.ts:388` (active court/history), `web/src/pages-info.tsx:60` and `web/src/pages-court.tsx:95` (shared totals/latest), `web/src/seasons.tsx:128` (connected seat), and `web/src/pages-court.tsx:533` (plea-season eligibility). Related point-state presentation is in `components.tsx`, `details.tsx` and `SaleSummary` in `pages-court.tsx`.
+
+Manual browser-tool inspection at 390 × 844 also confirmed the final live-read export: document width 390, Connect visible, and Buy PLEA at y=418–470 on the first screen. The complete submission file content is about 7.31 MB, below 8 MiB; no dependency/cache/archive directories or submodules are included.
+
+Current evidence is disposable: `test/scratch/fork/revision-after.json` and its screenshots, `closed-before.json`, `seat-before.json`, the initial history reproduction report, `test/scratch/run9-browser/revision-live.json`, `test/scratch/taste/`, and build/test logs. The fixture restores its fork snapshot, and signer keys exist only in process. Preliminary harness attempts hit duplicate-selector errors and one receipt-watcher timeout; selectors and the fork fixture’s receipt read were repaired, then the final complete 180-run check passed. These were harness failures, not successful app checks.
+
+Limitations: this revision did not repeat every original seed/objection/death/claim transaction scenario on the final export. The original primary scenario passed its 26 browser transactions during reproduction, and original checks below are preserved. No public signing, oracle-service response, production hosting change, physical wallet, native screen reader, WebKit or native zoom session was attempted. Axe does not establish full accessibility conformance. The scoped revision is complete for the three reported findings.
+
 These are worker-run checks, not an independent audit. This repair implements the 73 references mapped in `FIXES.md`. Contracts, existing build configuration, dependencies and lockfiles are unchanged. All transactions below went to a local Anvil fork; public Sepolia verification was read-only.
 
 ## Results

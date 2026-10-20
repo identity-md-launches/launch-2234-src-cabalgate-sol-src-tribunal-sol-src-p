@@ -24,6 +24,7 @@ import {
   verifyClaim,
   cashback,
   con,
+  courtCounts,
   duration,
   normalizeClaims,
   read,
@@ -57,38 +58,13 @@ export function Home() {
     dead = !!val(s, "CabalGate.diedAt"),
     season = seasonState(s, now),
     seeded = !!val(s, "PleaHook.seeded");
-  const latest =
-      s?.pleas
-        .filter((p) => p.verdictAt > 0n)
-        .sort((a, b) => Number(b.verdictAt - a.verdictAt))[0] || s?.pleas[0],
+  const latest = s?.court.latestVerdict || s?.pleas[0],
     price = BigInt(val(s, "PleaHook.priceX96") || 0n),
     previous = BigInt(val(s, "PleaHook.price24hAgo") || 0n),
     hourly = BigInt(val(s, "PleaHook.latestPrice") || 0n),
     supply = BigInt(val(s, "PLEA.totalSupply") || 0n),
     total = BigInt(con(s, "PLEA.TOTAL_SUPPLY") || 0n);
-  const approved =
-      s?.logs.filter((l) => l.eventName === "Verdict" && l.args.approved)
-        .length || 0,
-    denied =
-      s?.logs.filter((l) => l.eventName === "Verdict" && !l.args.approved)
-        .length || 0,
-    pending =
-      s?.logs.filter(
-        (l) =>
-          l.eventName === "PleaSubmitted" &&
-          !s.logs.some(
-            (e) =>
-              ["Verdict", "PleaFailed", "PleaExpired"].includes(e.eventName) &&
-              e.args.id === l.args.id,
-          ) &&
-          s.pleas.some(
-            (p) =>
-              p.id === l.args.id &&
-              now <=
-                Number(p.submittedAt) +
-                  Number(con(s, "CabalGate.PENDING_EXPIRY")),
-          ),
-      ).length || 0;
+  const court = courtCounts(s, now);
   const count = Number(val(s, "CabalGate.nextId") || 1n) - 1,
     trend = !previous
       ? "no 24h price yet, counts as flat"
@@ -156,7 +132,9 @@ export function Home() {
               String(count),
               dead
                 ? "Final count: no new pleas"
-                : `${approved} approved, ${denied} denied, ${count - approved - denied - pending} no verdict, ${pending} pending`,
+                : court
+                  ? `${court.approved} approved, ${court.denied} denied, ${court.noVerdict} no verdict, ${court.pending} pending`
+                  : "Court totals are unavailable until history finishes loading.",
             ],
             [
               "Season prize pot",

@@ -73,3 +73,13 @@ IMD_PLAYWRIGHT=/path/to/playwright/index.mjs node web/scripts/run9-fork-maintena
 The prepare script funds and impersonates local fork accounts and changes a fork token balance slot. The transaction scripts generate a temporary signer, set the gate and Tribunal’s signer storage on the fork only, sign EIP-712 verdicts in the Sepolia consumer domain, and use each consumer’s `QUESTION_CHAIN`. Keys are never exported. Public Sepolia checks are read-only. The app runs no oracle signer, runner, backend or automatic points recorder.
 
 The optional seat helper changes a balance on the fork and verifies `holdsSeat`; it never mints a real NFT. The profile/claim check snapshots and restores its test root and names. Run the death check after the court/season scenarios; the final partial-fill and maintenance checks snapshot and restore that state. `run9-fork-seasons.mjs` can resume the season portion after the court's case setup, deriving its case IDs from fork state. RPC fault, idle, cold-load and PNG checks are in the other `run9-*.mjs` helpers. They require a separate Playwright installation; the matrix also uses the locked axe-core dependency.
+
+## Independent review regression check
+
+Run `web/scripts/revision-court.mjs` on a fresh loopback Sepolia fork **after** prepare and the primary `run9-fork.mjs` scenario, before the other scenarios change its six pleas. It snapshots the fork, creates #7–32, signs #7’s verdict with an in-process fork signer, checks older active-case discovery/counts/pagination, sets the no-history holder’s seat balance, then closes season 1 without recording the original cases. It restores its snapshot on completion. No public RPC is accepted for writes.
+
+```sh
+IMD_PLAYWRIGHT=/path/to/playwright/index.mjs PLEA_REVISION_MATRIX=1 node web/scripts/revision-court.mjs
+```
+
+`PLEA_REVISION_MATRIX=1` adds the 180-run affected-state browser/axe sweep at five widths, both themes and wallet states. `PLEA_AXE` may specify an external axe script; otherwise it uses the locked frontend dependency. The normal mode checks the interactions and state assertions without the full matrix. `PLEA_EXPECT_OLD=1` is available to reproduce the old behavior against an export built before these repairs. Reports/screenshots remain under disposable `test/scratch/fork/`.

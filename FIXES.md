@@ -97,3 +97,15 @@ Evidence names below refer to `web/tests/`, the bounded `web/scripts/run9-*.mjs`
 The pinned CSS, sprite, checker and local fonts remain unchanged. The app retains static subpath hosting, live deployment/ABI verification, exact approvals, simulation and explicit gas, safe text rendering, public history, seat accounting, account-bound claims and wallet add-chain fallback. The donation control and Coinbase SDK are intentionally removed by D2/D3. The seed control and final form order intentionally follow this review.
 
 Publication and actual public-chain state-changing behavior are outside these local checks. The live run remained unseeded with a zero claim root during read-only verification. See `VALIDATION.md` for the final evidence counts and unperformed subchecks; this document is a worker record, not an independent certification.
+
+## Independent revision findings
+
+All three reports reproduced; `.imd-responses.json` supplies the full finding IDs and verdicts. Changes preserve the accepted interface, contracts, dependencies and design system.
+
+| Finding / original refs | Targeted change | Reproduction and recheck |
+| --- | --- | --- |
+| `663e8572…` · C18, S6, X5, X15 | Separate complete event-history court index from the 24-card page. Read older unresolved requests, open objection cases and latest verdict; share totals between Home and Wall. Cache immutable expired submissions/verdict block times. | Before: #7 missing, 24 pending / 3 no verdict. After: #7 open/latest, 26 / 1; pagination 24 → 32. Four new unit regressions and final browser matrix. |
+| `73b8478d…` · S2 | Read the connected wallet’s `holdsSeat` independently; use it in the seat panel and own standing. Omit a before-multiplier score row until there are recorded scores. | Before: true on chain, zero notices for a no-history holder. After: positive notices without a plea/leaderboard row, including both themes and phone widths. |
+| `92ffcc71…` · S2 | Derive the plea season from verdict time, read its closed flag, guard unknown/error states, disable closed-season Record and hide other closed record controls. Correct panel, timeline, detail-card and sale-summary copy. | Before: enabled Record, then `SeasonClosed`, no broadcast. After: explicit missed deadline on manual sale, sold appeal and lapse; positive unclosed-season control/simulation retained. |
+
+`VALIDATION.md` separates the current 27 tests, 180 affected fork views and 140 live read-only views from the previous delivery’s broader evidence. No real public-chain transaction was sent.

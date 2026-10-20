@@ -75,3 +75,9 @@ Start a page with Title and the kit's grid/stack primitives. Read live values th
 Keep the two pinned CSS files unchanged. Do not invent balances, histories, fees, recipients or oracle quotes. Do not render plea text as HTML, hide a missing input behind sample data, add an IMD diamond, introduce new fonts/colors/effects, or animate the page around a verdict. Retain the footer's statement that this is not an official IMD page.
 
 For another route, add a React page to the hash-router switch, compose the shared components, connect existing runtime reads and simulate every write. Recheck mobile reflow, keyboard focus, both themes, long values, failure states, and regenerate the asset manifest after the final build.
+
+## Court and recording states in this revision
+
+The 24-card Wall page is a presentation limit. Home’s latest-verdict card, objection cases and totals use a separate complete-history model in `web/src/chain.ts`; loading older active cases does not enlarge the initial card grid. The connected seat notice uses a direct `holdsSeat` read even before the holder records a plea.
+
+An unrecorded eligible approval from a closed season uses “Not recorded” and a plain sentence identifying that season. Its disabled Record action explains that recording is closed. The sale summary, detail card and timeline use the same missed-deadline state, including sold appeals and lapsed approvals. An unresolved season-status read keeps the action unavailable with a loading/error explanation. Existing token colors, typography, spacing, buttons and panel hierarchy are preserved; no new CSS or visual tokens were introduced. Current rendered coverage and limits are recorded in `VALIDATION.md`.

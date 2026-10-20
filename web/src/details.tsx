@@ -254,7 +254,13 @@ export function LetterDetails() {
   );
 }
 
-export function PleaTimeline({ p }: { p: Plea }) {
+export function PleaTimeline({
+  p,
+  missedSeason,
+}: {
+  p: Plea;
+  missedSeason?: bigint;
+}) {
   const { s, now, r } = useApp(),
     approved = [2, 4, 5].includes(p.status),
     points = approved && !p.standing?.[1] && !p.excluded,
@@ -288,19 +294,27 @@ export function PleaTimeline({ p }: { p: Plea }) {
     steps.push(
       [
         "Objections",
-        p.standing?.[0]
+        p.standing?.[0] && missedSeason === undefined
           ? `Points held until ${clock(objection)} or the panel rules`
           : `Closed at ${clock(objection)}`,
         "megaphone-simple",
-        p.standing?.[0] ? "is-now" : "is-done",
+        p.standing?.[0] && missedSeason === undefined ? "is-now" : "is-done",
       ],
       [
-        "Record the points",
+        missedSeason !== undefined
+          ? "Points not recorded"
+          : "Record the points",
         p.recorded
           ? `+${p.points} points recorded.`
-          : `+${p.points} points. Nothing records them by itself.`,
+          : missedSeason !== undefined
+            ? `Season ${missedSeason + 1n} closed before these points were recorded.`
+            : `+${p.points} points. Nothing records them by itself.`,
         "trophy",
-        p.recorded ? "is-done" : p.standing?.[0] ? "is-later" : "is-now",
+        p.recorded || missedSeason !== undefined
+          ? "is-done"
+          : p.standing?.[0]
+            ? "is-later"
+            : "is-now",
       ],
     );
   if (p.status === 3 && !p.isAppeal)
