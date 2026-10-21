@@ -2,15 +2,17 @@ import { useEffect, useState } from "react";
 import { useAccount, useDisconnect } from "wagmi";
 import {
   isAddress,
+  getAddress,
   keccak256,
   stringToHex,
   zeroAddress,
   type Address,
 } from "viem";
 import { useApp, useRead, useTx } from "./context";
-import { claimsAbi } from "./config";
+import { claimsAbi, resetHealth } from "./config";
 import {
   read,
+  countedPleas,
   getPlea,
   con,
   val,
@@ -48,9 +50,13 @@ export function Profile({ target }: { target?: string }) {
   const { r, s, now, refresh } = useApp(),
     { address } = useAccount(),
     { disconnect } = useDisconnect(),
-    wallet = target && isAddress(target) ? (target as Address) : address,
+    wallet = target
+      ? isAddress(target, { strict: false })
+        ? getAddress(target.toLowerCase())
+        : undefined
+      : address,
     mine = !!wallet && wallet.toLowerCase() === address?.toLowerCase(),
-    [lookup, setLookup] = useState(""),
+    [lookup, setLookup] = useState(target || ""),
     [name, setName] = useState(""),
     [dirty, setDirty] = useState(false),
     tx = useTx(name);
@@ -152,7 +158,7 @@ export function Profile({ target }: { target?: string }) {
             );
             return {
               index,
-              best,
+              best: [...best].sort((a, b) => Number(b) - Number(a)),
               rank,
               points,
               closed,
@@ -188,7 +194,9 @@ export function Profile({ target }: { target?: string }) {
           raw,
           fact,
           pleas,
-          seasons,
+          seasons: seasons.filter(
+            (k) => k.points > 0 || k.imd > 0n || k.bonus > 0n,
+          ),
         };
       },
       [wallet],
@@ -226,6 +234,24 @@ export function Profile({ target }: { target?: string }) {
       : cooldown > now
         ? clock(cooldown)
         : "Ready now";
+  if (target && !isAddress(target, { strict: false }))
+    return (
+      <>
+        <Title title="Profile" />
+        <Notice kind="bad" title="That is not an address.">
+          <p>
+            Paste one that starts with 0x and has 40 more characters, 0–9 and
+            a–f in either case.
+          </p>
+        </Notice>
+        <AddressLookup value={lookup} setValue={setLookup} />
+        {address && (
+          <a className="btn btn--sm" href="#/profile">
+            Back to your profile
+          </a>
+        )}
+      </>
+    );
   if (!wallet)
     return (
       <>
@@ -241,21 +267,26 @@ export function Profile({ target }: { target?: string }) {
     );
   return (
     <>
-      <Title title={label || "Profile"}>
+      <Title
+        title={label || "Profile"}
+        aside={
+          <>
+            {data?.seat && (
+              <span className="badge badge--seat">
+                <Icon name="armchair" />
+                SEAT ×{Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS")) / 10000}
+              </span>
+            )}
+            {!mine && <span className="pill">Read only</span>}
+          </>
+        }
+      />
+      <AddressView address={wallet} label={data?.current || "profile"} />
+      <p className="lead">
         {mine
           ? "Your wallet as PLEA sees it: what you hold, the buy record your next plea is scored on, your name, your pleas and your seasons."
           : `${label}’s public PLEA holdings, pleas and seasons.`}
-      </Title>
-      <div className="cluster">
-        {data?.seat && (
-          <span className="badge badge--seat">
-            <Icon name="armchair" />
-            SEAT ×{Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS")) / 10000}
-          </span>
-        )}
-        {!mine && <span className="pill">Read only</span>}
-      </div>
-      <AddressView address={wallet} label={data?.current || "profile"} />
+      </p>
       {mine && (
         <button className="link-btn" onClick={() => disconnect()}>
           Disconnect this wallet
@@ -265,7 +296,13 @@ export function Profile({ target }: { target?: string }) {
         <div className="error-box">
           <p className="error-box__title">Can’t read this profile</p>
           <p>{info.error}</p>
-          <button className="btn btn--sm" onClick={refresh}>
+          <button
+            className="btn btn--sm"
+            onClick={() => {
+              resetHealth();
+              void refresh();
+            }}
+          >
             Try again
           </button>
         </div>
@@ -282,7 +319,9 @@ export function Profile({ target }: { target?: string }) {
                   [
                     "PLEA",
                     tokenAmount(data.plea, s),
-                    `A plea: ${tokenAmount(data.plea / 100n, s)} to ${tokenAmount(data.plea / 2n < BigInt(con(s, "CabalGate.MAX_SELL")) ? data.plea / 2n : BigInt(con(s, "CabalGate.MAX_SELL")), s)}`,
+                    val(s, "CabalGate.diedAt")
+                      ? "Sells freely on the Buy page"
+                      : `A plea: ${tokenAmount(data.plea / 100n, s)} to ${tokenAmount(data.plea / 2n < BigInt(con(s, "CabalGate.MAX_SELL")) ? data.plea / 2n : BigInt(con(s, "CabalGate.MAX_SELL")), s)}`,
                   ],
                   [
                     s?.constants.pairSymbol,
@@ -296,12 +335,20 @@ export function Profile({ target }: { target?: string }) {
                   ],
                   [
                     "Next plea",
-                    next,
-                    "A sale, denial or lapse starts the cooldown",
+                    val(s, "CabalGate.diedAt") ? "Closed" : next,
+                    val(s, "CabalGate.diedAt")
+                      ? "Pleas are closed; sell on the Buy page."
+                      : "A sale, denial or lapse starts the cooldown",
                   ],
                 ]
               : [
-                  ["PLEA", tokenAmount(data.plea, s), "Public holdings"],
+                  [
+                    "PLEA",
+                    tokenAmount(data.plea, s),
+                    val(s, "CabalGate.diedAt")
+                      ? "Sells freely on the Buy page"
+                      : "Public holdings",
+                  ],
                   ...data.seasons
                     .slice(-2)
                     .reverse()
@@ -310,7 +357,13 @@ export function Profile({ target }: { target?: string }) {
                       k.rank >= 0 ? `#${k.rank + 1}` : "none yet",
                       `${k.points} points · ${k.best.join(" + ")}`,
                     ]),
-                  ["Next plea", next, "Public cooldown"],
+                  [
+                    "Next plea",
+                    val(s, "CabalGate.diedAt") ? "Closed" : next,
+                    val(s, "CabalGate.diedAt")
+                      ? "Pleas are closed; sell on the Buy page."
+                      : "Public cooldown",
+                  ],
                 ]
             ).map(([a, b, note], i) => (
               <div className="stat" key={i}>
@@ -433,7 +486,17 @@ export function Profile({ target }: { target?: string }) {
                   Shown on the Wall and the leaderboard instead of{" "}
                   <span className="mono">{short(wallet)}</span>:
                 </p>
-                <p className="wall-card__who">{name || short(wallet)}</p>
+                <div className="wall-card__who">
+                  <span className={`${name ? "" : "mono "}strong`}>
+                    {name || short(wallet)}
+                  </span>
+                  {data.seat && (
+                    <span className="badge badge--seat">
+                      SEAT ×
+                      {Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS")) / 10000}
+                    </span>
+                  )}
+                </div>
                 <TextBox
                   kind="name"
                   fieldId="profile-name"
@@ -450,6 +513,7 @@ export function Profile({ target }: { target?: string }) {
                 />
                 <div className="btn-row">
                   <Action
+                    connectText="Connect in the top bar to set a display name."
                     {...tx}
                     label="Save name"
                     describedBy="profile-name-checks"
@@ -505,6 +569,29 @@ export function Profile({ target }: { target?: string }) {
                 All pleas on the Wall <Icon name="arrow-right" />
               </a>
             </div>
+            {season &&
+              (() => {
+                const k = data.seasons.find(
+                  (k) => k.index === season.displayed,
+                );
+                const also =
+                  k &&
+                  countedPleas(s!, k.index, wallet, k.best)?.filter(
+                    (p) => !data.pleas.some((x) => x.id === p.pleaId),
+                  );
+                return also?.length ? (
+                  <p>
+                    Season {String(season.displayed + 1n)} also counts{" "}
+                    {also.map((p, i) => (
+                      <span key={String(p.pleaId)}>
+                        {i ? " and " : ""}
+                        <a href={`#/p/${p.pleaId}`}>#{String(p.pleaId)}</a>
+                      </span>
+                    ))}
+                    .
+                  </p>
+                ) : null;
+              })()}
             {data.pleas.length ? (
               <div className="wall-grid">
                 {data.pleas.map((p) => (
@@ -528,64 +615,101 @@ export function Profile({ target }: { target?: string }) {
           </section>
           <section className="section">
             <div className="split">
-              <Panel level={2} title={mine ? "Your seasons" : "Seasons"}>
-                <div
-                  className="table-wrap"
-                  role="region"
-                  aria-label="Profile seasons"
-                  tabIndex={0}
-                >
-                  <table className="table">
-                    <caption className="sr-only">
-                      Points, rank and prizes by season
-                    </caption>
-                    <thead>
-                      <tr>
-                        {["Season", "Points", "Rank", "Prize"].map((t) => (
-                          <th scope="col" key={t}>
-                            {t}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.seasons.map((k) => (
-                        <tr key={String(k.index)}>
-                          <th scope="row">
-                            {String(k.index + 1n)}
-                            <span className="small">
-                              {k.closed ? " closed, paid" : " so far"}
-                            </span>
-                          </th>
-                          <td>{k.points}</td>
-                          <td>{k.rank >= 0 ? k.rank + 1 : "none yet"}</td>
-                          <td>
-                            {tokenAmount(k.imd, s, true)} +{" "}
-                            {tokenAmount(k.bonus, s)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="small">
-                  Best three approved pleas count; prizes use the current season
-                  pot until the close. Each amount is rounded down.
-                </p>
+              <Panel
+                level={2}
+                title={mine ? "Your seasons" : "Seasons"}
+                flush
+                meta={
+                  season && (
+                    <a href="#/seasons">
+                      Season {String(season.displayed + 1n)} leaderboard
+                    </a>
+                  )
+                }
+              >
+                {!data.seasons.length ? (
+                  <p className="small">
+                    No plea of this wallet is recorded in any season yet.
+                  </p>
+                ) : (
+                  <>
+                    <div
+                      className="table-wrap"
+                      role="region"
+                      aria-label="Profile seasons"
+                      tabIndex={0}
+                    >
+                      <table className="table">
+                        <caption className="sr-only">
+                          Points, rank and prizes by season
+                        </caption>
+                        <thead>
+                          <tr>
+                            {["Season", "Points", "Rank", "Prize"].map((t) => (
+                              <th scope="col" key={t}>
+                                {t}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.seasons.map((k) => (
+                            <tr key={String(k.index)}>
+                              <th scope="row">
+                                Season {String(k.index + 1n)}
+                                <span className="cell-note">
+                                  {k.closed
+                                    ? "closed, paid"
+                                    : now >= Number(k.bounds[2])
+                                      ? "awaiting close"
+                                      : `${duration(Number(k.bounds[2]) - now)} left`}
+                                </span>
+                              </th>
+                              <td className="r">{k.points}</td>
+                              <td className="r">
+                                {k.rank >= 0 ? k.rank + 1 : "none yet"}
+                                {!k.closed && (
+                                  <span className="cell-note">so far</span>
+                                )}
+                              </td>
+                              <td className="r">
+                                {tokenAmount(k.imd, s, true)}
+                                <span className="cell-note">
+                                  + {tokenAmount(k.bonus, s)}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="small">
+                      {season &&
+                        (() => {
+                          const k = data.seasons.find(
+                            (k) => k.index === season.displayed,
+                          );
+                          return `${k && k.rank >= 0 ? `Season ${season.displayed + 1n}’s prize is rank ${k.rank + 1}’s share if it ended now. ` : ""}Prizes are rounded down and paid at the close, from ${clock(Number(season.current.bounds[2]) + Number(con(s, "Seasons.CLOSE_GRACE")))}.`;
+                        })()}
+                    </p>
+                  </>
+                )}
               </Panel>
               <Panel level={2} title="IMD seat">
                 <p>
                   {data.seat
                     ? "This wallet holds an IMD seat."
                     : "No seat multiplier for this wallet now."}{" "}
-                  The seat counts when the points are recorded; each score is
-                  multiplied by{" "}
+                  Hold an IMD seat NFT when your plea is recorded and its points
+                  are the judges’ score ×{" "}
                   {Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS")) / 10000},
                   rounded down.
                 </p>
+                <p className="label">Seat NFT · identity.md</p>
                 <AddressView
                   address={val(s, "Seasons.seat")}
-                  label="Seat NFT"
+                  label="identity.md seat NFT"
+                  shortDisplay
                 />
                 <a className="link-btn" href="#/seasons?seat=1">
                   How the seat multiplier works <Icon name="arrow-right" />
@@ -605,7 +729,7 @@ function AddressLookup({
   value: string;
   setValue: (v: string) => void;
 }) {
-  const invalid = !!value && !isAddress(value);
+  const invalid = !!value && !isAddress(value, { strict: false });
   return (
     <div className="field form-actions-top">
       <label className="field__label" htmlFor="profile-address">
@@ -630,9 +754,10 @@ function AddressLookup({
       )}
       <button
         className="btn form-actions-top"
-        aria-disabled={!isAddress(value)}
+        aria-disabled={!isAddress(value, { strict: false })}
         onClick={() =>
-          isAddress(value) && (location.hash = `#/profile/${value}`)
+          isAddress(value, { strict: false }) &&
+          (location.hash = `#/profile/${getAddress(value.toLowerCase())}`)
         }
       >
         Show profile

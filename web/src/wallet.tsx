@@ -85,7 +85,7 @@ export function Wallet() {
         } else throw e;
       }
     } catch (e) {
-      const text = explainError(e);
+      const text = explainError(e).title;
       setError(text);
       toast?.({ kind: "bad", text });
     } finally {
@@ -203,7 +203,7 @@ export function Wallet() {
                     try {
                       await connectAsync({ connector: c });
                     } catch (e) {
-                      setError(explainError(e));
+                      setError(explainError(e).title);
                     }
                   }}
                 >

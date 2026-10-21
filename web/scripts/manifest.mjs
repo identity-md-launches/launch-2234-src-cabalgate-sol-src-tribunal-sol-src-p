@@ -48,3 +48,9 @@ fs.writeFileSync(
 console.log(
   `Manifest: ${files.length} assets, ${files.reduce((s, p) => s + fs.statSync(new URL(p, root)).size, 0)} bytes`,
 );
+
+for (const file of files.filter(p=>p.endsWith(".js"))) {
+  const text=fs.readFileSync(new URL(file,root),"utf8");
+  if (/cbwsdk|cca-lite|@coinbase\/wallet-sdk|keyval-store/.test(text)) throw Error(`Coinbase SDK code in ${file}`);
+}
+console.log("D3: no Coinbase SDK markers in exported JavaScript");

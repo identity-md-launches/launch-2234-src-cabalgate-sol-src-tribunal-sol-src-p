@@ -231,3 +231,128 @@
   z-index: 1;
   border-radius: inherit;
 }
+/* Round 2: page rules from the pinned Home, Wall and Seasons mockups. */
+.hero .page-title {
+  margin-bottom: var(--space-4);
+}
+.hero-stamp {
+  padding-block: var(--space-2);
+}
+@media (max-width: 399px) {
+  .hero-title {
+    margin-inline-end: calc(-1 * var(--space-1));
+  }
+}
+@media (min-width: 1100px) {
+  .hero {
+    align-items: center;
+  }
+}
+@media (max-width: 767px) {
+  .hero-stamp .stamp--xl {
+    font-size: var(--text-2xl);
+  }
+}
+.info-panel > .link-btn,
+.info-panel > .btn-row {
+  margin-top: auto;
+}
+.info-panel > .link-btn {
+  align-self: flex-start;
+}
+.wall-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+}
+.main .wall-tools {
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+.wall-tools > .chips {
+  flex-basis: 100%;
+}
+.wall-tools__more[open] {
+  flex-basis: 100%;
+}
+.wall-tools__more > summary {
+  gap: var(--space-1);
+}
+.wall-tools__more > summary::-webkit-details-marker {
+  display: none;
+}
+.wall-tools__more[open] > summary .icon {
+  transform: rotate(180deg);
+}
+.wall-tools__panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  margin-top: var(--space-3);
+}
+.wall-tools__panel > div {
+  display: grid;
+  gap: var(--space-2);
+}
+.wall-more {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+.wall-grid + .wall-more {
+  margin-top: var(--space-6);
+}
+.standing {
+  gap: var(--space-4) var(--space-6);
+  align-items: flex-start;
+}
+.standing .stat {
+  padding: 0;
+  border: 0;
+}
+.waiting-season {
+  margin-top: var(--space-4);
+}
+.waiting-season > summary {
+  cursor: pointer;
+  min-height: var(--target);
+}
+.waiting-season > summary + * {
+  margin-top: var(--space-4);
+}
+.cell-note {
+  display: block;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+@media (min-width: 768px) and (max-width: 1279px) {
+  .loading-wall > :nth-child(3) {
+    display: none;
+  }
+}
+/* Focusable table regions have space for their full ring inside flush panels. */
+.panel--flush > .panel__body {
+  min-width: 0;
+}
+.panel--flush > .table-wrap {
+  outline-offset: calc(-1 * var(--space-2));
+}
+
+@media (max-width: 359px) {
+  .hero-title {
+    font-size: var(--text-3xl);
+  }
+}
+/* Long future UTC dates and quote summaries must wrap inside phone cards. */
+.pill {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.plea__summary > span,
+.wall-card__nums span {
+  max-width: 100%;
+  white-space: normal;
+}

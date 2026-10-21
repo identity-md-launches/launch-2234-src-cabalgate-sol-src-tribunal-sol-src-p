@@ -1,3 +1,6 @@
+import { PageLoading } from "./page-loading";
+import { PageBoundary } from "./page-boundary";
+import { resetHealth } from "./config";
 import { Profile } from "./profile";
 import { Seasons } from "./seasons";
 import { useEffect, useState, useRef } from "react";
@@ -63,6 +66,12 @@ export default function App() {
       window.removeEventListener("keydown", esc);
     };
   }, []);
+  const pendingAnchor=useRef(""), anchorUntil=useRef(0);
+  useEffect(()=>{
+    const cancel=()=>{pendingAnchor.current="";};
+    window.addEventListener("wheel",cancel,{passive:true});window.addEventListener("touchmove",cancel,{passive:true});window.addEventListener("keydown",cancel);
+    return ()=>{window.removeEventListener("wheel",cancel);window.removeEventListener("touchmove",cancel);window.removeEventListener("keydown",cancel);};
+  },[]);
   useEffect(() => {
     const titles: Record<string, string> = {
       "": "Selling needs a plea",
@@ -90,9 +99,14 @@ export default function App() {
           : page === "seasons" && location.hash.includes("seat=1")
             ? "seat"
             : "";
-    if (anchor)
-      setTimeout(() => document.getElementById(anchor)?.scrollIntoView(), 100);
+    pendingAnchor.current = anchor;
+    anchorUntil.current=Date.now()+20000;
   }, [hash]);
+  useEffect(()=>{
+    if(!pendingAnchor.current || Date.now()>anchorUntil.current) return;
+    const target=document.getElementById(pendingAnchor.current);
+    if(target){target.scrollIntoView();pendingAnchor.current="";}
+  },[hash,!!s]);
   useEffect(() => {
     if (menu) document.querySelector<HTMLAnchorElement>("#drawer a")?.focus();
   }, [menu]);
@@ -263,50 +277,21 @@ export default function App() {
                     ? "Can’t read the latest verdicts"
                     : "Can’t reach Sepolia"}
             </p>
-            <p>{error}</p>
-            <button className="btn btn--sm" onClick={refresh}>
-              Try again
-            </button>
+            <p className="small">{error}</p><div className="btn-row"><button className="btn btn--sm" onClick={()=>{resetHealth();void refresh();}}><Icon name="arrow-clockwise"/>Try again</button></div>
           </div>
         )}
         {s?.historyError && (
           <div className="app-error">
             <Notice kind="warn" title="History is incomplete">
               <p>{s.historyError}</p>
-              <button className="link-btn" onClick={refresh}>
+              <button className="link-btn" onClick={()=>{resetHealth();void refresh();}}>
                 Try history again
               </button>
             </Notice>
           </div>
         )}
-        {!s && error ? null : !s ? (
-          <>
-            <Title
-              title={
-                page
-                  ? {
-                      buy: "Buy PLEA",
-                      plead: "Plead to sell",
-                      seasons: "Seasons",
-                      wall: "The Wall",
-                      letters: "Plead by letter",
-                      profile: "Profile",
-                      claim: "Claim your PLEA",
-                      objections: "Objection!",
-                    }[page] || "PLEA"
-                  : "Buying is open. Selling needs a plea."
-              }
-            />
-            <p className="loading-label">
-              <Icon name="hourglass" />
-              Reading the pool, the Cabal and the season from the chain…
-            </p>
-            <div className="skeleton" aria-hidden="true">
-              <span className="skeleton__line" />
-              <span className="skeleton__line" />
-              <span className="skeleton__line" />
-            </div>
-          </>
+        <PageBoundary key={hash}>
+        {!s && error ? null : !s ? (<PageLoading page={page} id={path[1]}/>
         ) : page === "buy" ? (
           <Buy />
         ) : page === "plead" ? (
@@ -355,6 +340,7 @@ export default function App() {
             ))}
           </div>
         )}
+        </PageBoundary>
       </main>
       <footer className="site-footer">
         <div className="page">

@@ -119,6 +119,10 @@ export function factParts(
       : BigInt(held + profit),
   );
   return {
+    shareBps: balance ? ceil(amount * 10000n, balance) : null,
+    heldFor: basis[1] && basis[2] ? Math.max(0, now - Number(basis[2])) : null,
+    pnlBps: spent ? ((value - spent) * 10000n) / spent : null,
+    trendLabel: trend === 9 ? "up" : trend === 0 ? "down" : "flat",
     share,
     held,
     profit,
@@ -126,5 +130,74 @@ export function factParts(
     total: balance ? share + covered + trend : 0,
     uncovered: basis[1] < amount ? amount - basis[1] : 0n,
     weighted: covered,
+  };
+}
+
+/** Round each displayed fee part once; sums use those same bigint values. */
+export function feeDisplay(
+  raw: bigint,
+  c: Record<string, any>,
+  extra = 0n,
+  dead = false,
+  payText?: string,
+) {
+  const E = 10n ** 18n,
+    bps = (key: string) => BigInt(c[`PleaHook.${key}`] || 0),
+    normal = bps("IMD_FEE_BPS"),
+    fee = (raw * (normal + extra)) / (10000n + normal + extra),
+    reaches = raw - fee;
+  const part = (key: string) => (reaches * bps(key)) / 10000n;
+  const round = (n: bigint, d: number, up = false) => {
+    const unit = 10n ** BigInt(18 - d);
+    return (n / unit + (up && n % unit ? 1n : 0n)) * unit;
+  };
+  const cleaned = payText?.replaceAll(",", "");
+  const validText =
+    cleaned && /^\d+(\.\d*)?$/.test(cleaned) ? cleaned : undefined;
+  const [whole, fraction = ""] = validText?.split(".") || [];
+  const pay = validText
+    ? BigInt(whole || "0") * E +
+      BigInt((fraction + "0".repeat(18)).slice(0, 18))
+    : round(raw, 2, true);
+  const payDigits = Math.min(18, Math.max(2, fraction.length));
+  let cashDigits = 2,
+    partDigits = 3;
+  const parts = () => ({
+    cash: round(part("CASHBACK_BPS"), cashDigits),
+    owner: round(part("OWNER_BPS"), cashDigits, true),
+    prize: dead ? 0n : round(part("PRIZE_BPS"), partDigits, true),
+    wall: round(
+      part("POOL_BPS") + (dead ? part("PRIZE_BPS") : 0n),
+      partDigits,
+      true,
+    ),
+    launch: round(fee - (reaches * normal) / 10000n, cashDigits, true),
+  });
+  let values = parts();
+  // Sub-cent inputs need more precision to keep conservative rounding from exceeding the payment.
+  while (
+    Object.values(values).reduce((a, b) => a + b, 0n) > pay &&
+    partDigits < 18
+  ) {
+    cashDigits++;
+    partDigits++;
+    values = parts();
+  }
+  const { cash, owner, prize, wall, launch } = values,
+    fees = cash + owner + prize + wall;
+  const digits =
+    fees % 10n ** BigInt(18 - cashDigits) ? partDigits : cashDigits;
+  const fmt = (n: bigint, d = digits) =>
+    `${n < 0n ? "−" : ""}${((n < 0n ? -n : n) / E).toLocaleString("en-US")}.${((n < 0n ? -n : n) % E).toString().padStart(18, "0").slice(0, d)}`;
+  return {
+    cash: fmt(cash, cashDigits),
+    owner: fmt(owner, cashDigits),
+    prize: fmt(prize, partDigits),
+    wall: fmt(wall, partDigits),
+    launch: fmt(launch, cashDigits),
+    fees: fmt(fees),
+    reaches: fmt(pay - fees - launch, Math.max(digits, payDigits)),
+    pay: fmt(pay, payDigits),
+    digits,
   };
 }

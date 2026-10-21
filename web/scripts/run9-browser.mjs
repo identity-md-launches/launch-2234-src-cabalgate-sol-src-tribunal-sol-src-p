@@ -146,6 +146,8 @@ try {
   await page
     .getByRole("heading", { name: "Latest verdicts", exact: true })
     .waitFor({ timeout: 90000 });
+  await page.locator("#main").waitFor({timeout:90000});
+  await page.locator(".page-loading").waitFor({state:"detached",timeout:90000});
   if (process.env.PLEA_QA_WALLET) {
     if (
       await page.getByRole("button", { name: "Connect", exact: true }).count()
@@ -170,6 +172,7 @@ try {
           localStorage.setItem("plea-theme", t);
         }, theme);
         await page.goto(base + "#/" + route, { waitUntil: "domcontentloaded" });
+        await page.locator(".page-loading").waitFor({state:"detached",timeout:90000});
         await page.evaluate(() => document.fonts.ready);
         await page.waitForTimeout(120);
         await page.addScriptTag({ content: axe });

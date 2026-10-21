@@ -18,21 +18,36 @@ import {
   type Hex,
 } from "viem";
 import type { Runtime } from "./config";
-import { discover } from "./config";
+import { discover, resetHealth } from "./config";
 import {
   readStatic,
+  getPlea,
+  read,
+  blockTime,
+  short,
+  span,
+  val,
+  con,
+  soldFor,
+  feeInPleaText,
   readSnapshot,
   scanLogs,
   tokenAmount,
   clock,
   type Snapshot,
 } from "./chain";
-import { explainError, explainReadError, type ErrorMap } from "./errors";
+import {
+  explainError,
+  explainReadError,
+  DisplayError,
+  type ErrorMessage,
+  type ErrorMap,
+} from "./errors";
 type AppContext = {
   r: Runtime;
   s?: Snapshot;
   error: string;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<boolean>;
   verified: boolean;
   now: number;
   toast?: (x: Toast) => void;
@@ -50,6 +65,7 @@ export type Toast = {
   hash?: string;
   href?: string;
   link?: string;
+  role?: "status" | "alert";
 };
 export function DataProvider({
   r,
@@ -82,16 +98,21 @@ export function DataProvider({
   const toastId = useRef(0);
   const pushToast = useCallback(
     (t: Toast) =>
-      setToasts((old) => [...old.slice(-2), { ...t, id: ++toastId.current }]),
+      setToasts((old) => {
+        if (t.hash && old.some((x) => x.hash === t.hash && x.text === t.text))
+          return old;
+        return [...old.slice(-2), { ...t, id: ++toastId.current }];
+      }),
     [],
   );
   const { address } = useAccount();
   const wallet = useRef(address);
   wallet.current = address;
-  const refreshWaiters = useRef<(() => void)[]>([]);
+  const refreshWaiters = useRef<((ok: boolean) => void)[]>([]);
   const queued = useRef(false),
     failures = useRef(0),
-    lastSnapshot = useRef(0);
+    lastSnapshot = useRef(0),
+    observedHead = useRef<bigint | undefined>(undefined);
   const previous = useRef<Snapshot | undefined>(undefined);
   const constants = useRef<Record<string, any> | undefined>(undefined);
   const busy = useRef(false);
@@ -119,8 +140,8 @@ export function DataProvider({
         pushToast({
           kind: "info",
           icon: "clock",
-          text: `The window closed at ${clock(end)}.`,
-          body: `Plea #${id} lapsed unsold; its points still count.`,
+          text: `The window closed at ${clock(end, true)}.`,
+          body: `Plea #${id} lapsed: nothing was sold.${p.excluded || p.standing?.[1] ? "" : ` Your +${p.points} points still count.`} Next plea at ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.`,
           href: `#/p/${id}`,
           link: `Open plea #${id}`,
         });
@@ -136,7 +157,7 @@ export function DataProvider({
   const refresh = useCallback(async () => {
     if (busy.current) {
       queued.current = true;
-      return new Promise<void>((resolve) =>
+      return new Promise<boolean>((resolve) =>
         refreshWaiters.current.push(resolve),
       );
     }
@@ -160,17 +181,42 @@ export function DataProvider({
       }
       if (previous.current && wallet.current)
         for (const event of next.logs.slice(previous.current.logs.length)) {
-          const p = next.pleas.find((p) => p.id === event.args.id);
+          const eventId = ["Verdict", "Delivered"].includes(event.eventName)
+            ? event.args.id
+            : undefined;
+          const p = eventId
+            ? next.pleas.find((p) => p.id === eventId) ||
+              (await getPlea(r, eventId, next.logs))
+            : undefined;
           if (
             event.eventName === "Verdict" &&
+            !next.logs
+              .slice(previous.current.logs.length)
+              .some(
+                (l) =>
+                  l.eventName === "Delivered" && l.args.id === event.args.id,
+              ) &&
             p?.seller.toLowerCase() === wallet.current.toLowerCase()
           )
             pushToast({
               kind: event.args.approved ? "ok" : "bad",
-              text: `${event.args.approved ? "Approved" : "Denied"}, ${p.score} vs need ${p.need}.`,
+              text: event.args.approved
+                ? `Approved, ${p.score} vs need ${p.need}.`
+                : `Denied, ${p.score} vs need ${p.need}: ${p.need - p.score} short.`,
+              icon: event.args.approved ? "check-circle" : "x-circle",
+              role: "status",
               body: event.args.approved
                 ? `Sell within ${Number(constants.current["CabalGate.EXECUTE_WINDOW"]) / 60} minutes, by ${clock(Number(p.verdictAt) + Number(constants.current["CabalGate.EXECUTE_WINDOW"]))}.`
-                : `One appeal until ${clock(Number(p.verdictAt) + Number(constants.current["CabalGate.COOLDOWN"]))}.`,
+                : !p.isAppeal &&
+                    !p.appealed &&
+                    val(next, "CabalGate.cabalAlive") &&
+                    next.timestamp <=
+                      Number(p.verdictAt) +
+                        Number(con(next, "CabalGate.COOLDOWN"))
+                  ? p.flags & 1
+                    ? `Send APPEAL <text> to the Letterbox: ${feeInPleaText(next, BigInt(con(next, "CabalGate.ORACLE_FEE")) + BigInt(con(next, "CabalGate.APPEAL_POOL_SHARE")) + 250000000000000000n)}. Call settle to return escrow and tip if you do not appeal.`
+                    : `One appeal until ${clock(Number(p.verdictAt) + Number(con(next, "CabalGate.COOLDOWN")))}.`
+                  : undefined,
               href: `#/p/${p.id}`,
               link: `Open plea #${p.id}`,
             });
@@ -187,31 +233,30 @@ export function DataProvider({
           }
           if (
             event.eventName === "Delivered" &&
-            event.args.writer?.toLowerCase() === wallet.current.toLowerCase()
+            p?.seller.toLowerCase() === wallet.current.toLowerCase()
           )
-            pushToast({
-              kind: "sold",
-              text: `Sold for you: ${tokenAmount(event.args.imdOut, next, true)}.`,
-              hash: event.transactionHash,
-            });
+            pushToast(await deliveredToast(r, next, p!, event));
         }
       clockBase.current = { chain: next.timestamp, local: Date.now() };
       setNow(next.timestamp);
       lastSnapshot.current = Date.now();
+      observedHead.current = next.head;
       failures.current = 0;
       previous.current = next;
       setS(next);
       setError("");
+      return true;
     } catch (e) {
       failures.current++;
       if (!previous.current || failures.current >= 2)
         setError(explainReadError(e));
+      return false;
     } finally {
       busy.current = false;
       if (queued.current) {
         queued.current = false;
         const waiting = refreshWaiters.current.splice(0);
-        void refresh().finally(() => waiting.forEach((resolve) => resolve()));
+        void refresh().then((ok) => waiting.forEach((resolve) => resolve(ok)));
       }
     }
   }, [r]);
@@ -219,20 +264,26 @@ export function DataProvider({
     refresh();
     let stopped = false,
       timerPoll: ReturnType<typeof setTimeout>;
+
     const poll = async () => {
       if (stopped) return;
       if (!document.hidden && !busy.current) {
         try {
           const block = await r.client.getBlock();
+          const scan =
+            observedHead.current === undefined
+              ? undefined
+              : await scanLogs(r, observedHead.current + 1n, block.number);
+          if (scan?.error) throw scan.error;
+          observedHead.current = block.number;
           if (
             !previous.current ||
-            (block.number > previous.current.block &&
-              ((await scanLogs(r, previous.current.block + 1n, block.number))
-                .length > 0 ||
-                Date.now() - lastSnapshot.current >= 60000))
+            failures.current ||
+            previous.current.historyError ||
+            scan?.logs.length ||
+            Date.now() - lastSnapshot.current >= 60000
           )
             await refresh();
-          failures.current = 0;
         } catch (e) {
           failures.current++;
           if (failures.current >= 2) setError(explainReadError(e));
@@ -247,6 +298,14 @@ export function DataProvider({
         );
     };
     timerPoll = setTimeout(poll, 12000);
+    const recover = () => {
+      if (!document.hidden) {
+        resetHealth();
+        void refresh();
+      }
+    };
+    window.addEventListener("online", recover);
+    document.addEventListener("visibilitychange", recover);
     const timer = setInterval(
       () =>
         setNow(
@@ -258,6 +317,8 @@ export function DataProvider({
       1000,
     );
     return () => {
+      window.removeEventListener("online", recover);
+      document.removeEventListener("visibilitychange", recover);
       stopped = true;
       clearTimeout(timerPoll);
       clearInterval(timer);
@@ -285,7 +346,7 @@ export function DataProvider({
           <div
             key={toast.id}
             className={`toast toast--${toast.kind || "ok"}`}
-            role={toast.kind === "bad" ? "alert" : "status"}
+            role={toast.role || (toast.kind === "bad" ? "alert" : "status")}
           >
             <svg className="icon" aria-hidden="true">
               <use
@@ -302,7 +363,7 @@ export function DataProvider({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  View transaction
+                  {toast.link || "View transaction"}
                 </a>
               )}
             </div>
@@ -378,7 +439,7 @@ export function useTx(resetKey?: string) {
   const { r, s, verified, refresh, toast, saveReceipt, snapshot } = useApp();
   const { address, chainId, connector } = useAccount();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ErrorMessage>();
   const [hash, setHash] = useState<Hex>();
   const [done, setDone] = useState(false);
   const lock = useRef(false);
@@ -388,7 +449,7 @@ export function useTx(resetKey?: string) {
     if (lock.current) return;
     setDone(false);
     setHash(undefined);
-    setError("");
+    setError(undefined);
   };
   useEffect(() => {
     if (!busy && lastKey.current !== activeKey) {
@@ -416,8 +477,9 @@ export function useTx(resetKey?: string) {
     lock.current = true;
     setBusy(true);
     setDone(false);
-    setError("");
+    setError(undefined);
     setHash(undefined);
+    let sentHash: Hex | undefined;
     try {
       if (!connector || !address)
         throw Error("Connect in the top bar to send this transaction.");
@@ -448,19 +510,29 @@ export function useTx(resetKey?: string) {
         chain: r.chain,
         gas: (estimate * 130n + 99n) / 100n,
       });
+      sentHash = h;
       setHash(h);
       const receipt = await r.client.waitForTransactionReceipt({
         hash: h,
         confirmations: 1,
         timeout: 180000,
       });
-      if (receipt.status !== "success")
-        throw Error("The transaction reverted.");
+      if (receipt.status !== "success") {
+        await r.client.call({
+          ...req,
+          account: address,
+          blockNumber: receipt.blockNumber,
+        });
+        throw new DisplayError({
+          title: "Mined but reverted.",
+          body: "Nothing was traded; only the gas was spent. Try again.",
+        });
+      }
       await refresh();
       setDone(true);
       if (fn !== "approve") {
         const message = {
-          ...receiptToast(r, snapshot?.() || s!, receipt, fn),
+          ...(await receiptToast(r, snapshot?.() || s!, receipt, fn, address)),
           ...options?.toast?.(receipt),
           hash: h,
         };
@@ -475,7 +547,12 @@ export function useTx(resetKey?: string) {
     } catch (e) {
       const text = explainError(e, Object.values(r.abis), options?.errors);
       setError(text);
-      toast?.({ text, kind: "bad" });
+      toast?.({
+        text: text.title,
+        body: text.body,
+        kind: "bad",
+        hash: sentHash,
+      });
       return undefined;
     } finally {
       setBusy(false);
@@ -508,12 +585,13 @@ export function receiptEvents(r: Runtime, receipt: TransactionReceipt) {
     return [];
   }) as any[];
 }
-function receiptToast(
+async function receiptToast(
   r: Runtime,
   s: Snapshot,
   receipt: TransactionReceipt,
   fn: string,
-): Toast {
+  wallet?: string,
+): Promise<Toast> {
   const events = receiptEvents(r, receipt),
     find = (n: string) => events.find((e) => e.eventName === n)?.args;
   const p = find("PleaSubmitted"),
@@ -525,6 +603,15 @@ function receiptToast(
     closed = find("SeasonClosedOut");
   if (fn === "seed")
     return { kind: "ok", text: "Trading is open. Make your opening buy now." };
+  const escrow = find("Escrowed");
+  if (p && escrow && Number(escrow.flags) & 1)
+    return {
+      kind: "pending",
+      text: `Letter received as plea #${p.id}. The Cabal is reading your mail.`,
+      body: `${tokenAmount(con(s, "CabalGate.ORACLE_FEE") + 250000000000000000n, s, true)} in fees, about ${tokenAmount(escrow.feePlea, s, false, 0, "up")}, paid from your PLEA. Usually 3 to 6 minutes.`,
+      href: `#/p/${p.id}`,
+      link: `Open plea #${p.id}`,
+    };
   if (p)
     return {
       kind: "pending",
@@ -542,11 +629,21 @@ function receiptToast(
       href: `#/p/${object.pleaId}`,
       link: `Open plea #${object.pleaId}`,
     };
-  if (sale)
+  if (delivered)
+    return deliveredToast(r, s, await getPlea(r, delivered.id, s.logs), {
+      args: delivered,
+      blockNumber: receipt.blockNumber,
+      transactionHash: receipt.transactionHash,
+    });
+  if (sale) {
+    const p = await getPlea(r, sale.id, s.logs),
+      time = await blockTime(r, receipt.blockNumber);
     return {
       kind: "sold",
-      text: `Sold ${tokenAmount(sale.amountIn, s)} for ${tokenAmount(delivered?.imdOut || sale.imdOut, s, true)}.`,
+      text: `Sold ${tokenAmount(sale.amountIn, s)} for ${tokenAmount(sale.imdOut, s, true)}.`,
+      body: `${p.excluded || p.standing?.[1] ? "" : `Record your +${p.points} points after ${clock(Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW")))}. `}Next plea at ${clock(time + Number(con(s, "CabalGate.COOLDOWN")))}.`,
     };
+  }
   if (closed) {
     const prizes = events.filter((e) => e.eventName === "PrizePaid"),
       bonuses = events.filter((e) => e.eventName === "BonusPaid"),
@@ -556,33 +653,40 @@ function receiptToast(
       body: `${prizes.length} wallets paid ${tokenAmount(closed.paid, s, true)} + ${tokenAmount(
         bonuses.reduce((n, e) => n + BigInt(e.args.amount), 0n),
         s,
-      )}. ${tokenAmount(BigInt(closed.pot) - BigInt(closed.paid), s, true)} rolls over to season ${Number(closed.season) + 2}; ${tokenAmount(burned, s)} burned.`,
+      )}. ${tokenAmount(BigInt(closed.pot) - BigInt(closed.paid), s, true)} ${val(s, "CabalGate.diedAt") && BigInt(closed.season) === BigInt(s.v.displayedSeason) ? "is left for the buy wall" : `rolls over to season ${Number(closed.season) + 2}`}; ${tokenAmount(burned, s)} burned.`,
     };
   }
   if (recorded) {
-    const best = s.logs
-        .filter(
-          (l) =>
-            l.eventName === "Recorded" &&
-            l.args.season === recorded.season &&
-            l.args.wallet.toLowerCase() === recorded.wallet.toLowerCase(),
-        )
-        .map((l) => Number(l.args.points))
-        .sort((a, b) => b - a)
-        .slice(0, 3),
-      top = s.v.seasons[String(recorded.season)]?.top || [],
+    const best = (
+        await read(r, "Seasons", "bestOf", [recorded.season, recorded.wallet])
+      )
+        .filter(Number)
+        .sort((a: number, b: number) => b - a),
+      top = await read(r, "Seasons", "topOf", [recorded.season]),
       rank = top.findIndex(
         (e: any) => e.wallet.toLowerCase() === recorded.wallet.toLowerCase(),
-      );
+      ),
+      points =
+        events.find(
+          (e) =>
+            e.eventName === "SeatMultiplier" &&
+            e.args.pleaId === recorded.pleaId,
+        )?.args.pleaPoints ?? recorded.score;
     return {
-      text: `+${recorded.points} points recorded.`,
-      body: `Season ${Number(recorded.season) + 1}: ${best.reduce((a, b) => a + b, 0)} points (${best.join(" + ")})${rank >= 0 ? `, rank ${rank + 1}` : ""}.`,
+      text: `+${points} points recorded.`,
+      body: `Season ${Number(recorded.season) + 1}: ${best.reduce((a: number, b: number) => a + b, 0)} points (${best.join(" + ")})${rank >= 0 ? `, rank ${rank + 1}` : ""}.`,
     };
   }
-  if (claim)
+  if (claim) {
+    const vault = claim.account.toLowerCase() !== wallet?.toLowerCase();
     return {
-      text: `Claimed ${tokenAmount(claim.amount, s)} for ${claim.account}.`,
+      text: `Claimed ${tokenAmount(claim.amount, s)} for ${vault ? "the vault " : ""}${short(claim.account)}.`,
+      body: vault
+        ? "The PLEA is on the vault; this wallet paid only the gas."
+        : `Claim #${claim.index} is done. Selling it will take a plea.`,
+      link: "View the receipt",
     };
+  }
   const nameSet = find("NameSet");
   if (nameSet)
     return {
@@ -595,4 +699,19 @@ function receiptToast(
   if (fn === "settle")
     return { text: "Escrow or stake settled. Check the updated balance." };
   return { text: "Transaction confirmed." };
+}
+
+async function deliveredToast(
+  r: Runtime,
+  s: Snapshot,
+  p: import("./chain").Plea,
+  event: any,
+): Promise<Toast> {
+  const time = await blockTime(r, event.blockNumber);
+  return {
+    kind: "sold",
+    text: `Approved, ${p.score} vs need ${p.need}, and sold for you: ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s), s, true)}.`,
+    body: `A runner (${short(event.args.runner)}) sold it within the ${span(Number(con(s, "CabalGate.EXECUTE_WINDOW")))} and earned the ${tokenAmount(event.args.tip, s, true)} tip.${p.excluded || p.standing?.[1] ? "" : ` Record your +${p.points} points after ${clock(Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW")))}.`} Next plea after ${clock(time + Number(con(s, "CabalGate.COOLDOWN")))}.`,
+    hash: event.transactionHash,
+  };
 }

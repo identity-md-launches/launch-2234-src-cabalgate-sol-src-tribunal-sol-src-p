@@ -343,6 +343,14 @@ async function buy(page, value) {
     .getByText(/Bought .* PLEA for .* imdTEST\./)
     .first()
     .waitFor({ timeout: 30000 });
+  assert.equal(await page.locator("#pay").getAttribute("aria-invalid"), null);
+  await page
+    .getByRole("button", { name: "Make another trade", exact: true })
+    .click();
+  assert.equal(
+    await page.getByLabel("You pay", { exact: true }).inputValue(),
+    "",
+  );
 }
 async function plea(
   page,
@@ -434,7 +442,7 @@ try {
   await p1.goto(base + "#/buy");
   await p1.getByLabel("You pay", { exact: true }).fill("100");
   await p1
-    .getByText(/above the .*launch cap/)
+    .getByText(/Until .*one buy can take at most/)
     .first()
     .waitFor({ timeout: 20000 });
   assert.equal(
@@ -444,7 +452,14 @@ try {
     "true",
   );
 
-  steps.push("T4: launch cap blocks approval");
+  assert.equal(
+    await p1
+      .getByLabel("You pay", { exact: true })
+      .getAttribute("aria-invalid"),
+    "true",
+  );
+  assert.equal(await p1.locator("#pay-hint").count(), 1);
+  steps.push("T4: launch cap blocks approval and marks its field invalid once");
   await warp(91 * 60);
   await p1.reload();
   await p1.getByRole("heading", { name: /Swap imdTEST/ }).waitFor();
@@ -454,6 +469,19 @@ try {
     "T3: 30 imdTEST fills fully after launch, with post-trade price limit",
   );
   const manual = await plea(p1, { auto: false });
+  await p1.goto(base + "#/");
+  await p1
+    .locator(".hero .stamp")
+    .filter({ hasText: "PENDING" })
+    .waitFor({ timeout: 30000 });
+  assert.doesNotMatch(
+    await p1.locator(".hero .plea__summary").innerText(),
+    /Sells|Sold|points/,
+  );
+  assert.match(await p1.locator(".hero .plea__summary").innerText(), /need/);
+  steps.push(
+    "Round-2 X2: pending hero shows amount and need, with no sale or points",
+  );
   await verdict("CabalGate", manual, 40);
   await p1.goto(base + `#/p/${manual}`);
   await p1.reload();

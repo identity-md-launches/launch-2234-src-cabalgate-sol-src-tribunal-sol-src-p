@@ -183,7 +183,7 @@ test("T4: nested PoolManager WrappedError decodes the inner hook error", () => {
       "0x",
     ],
   });
-  assert.match(explainError({ cause: { data } }, [hook]), /launch cap/);
+  assert.match(explainError({ cause: { data } }, [hook]).title, /launch cap/);
 });
 test("T4: every custom error in all eight pinned ABIs has a plain remedy", () => {
   for (const file of fs.readdirSync(

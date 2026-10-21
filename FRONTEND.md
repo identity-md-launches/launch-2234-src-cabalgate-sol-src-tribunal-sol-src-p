@@ -12,7 +12,7 @@ npm --prefix web run build
 npm --prefix web run preview
 ```
 
-The existing package manifest and lockfile are unchanged. On this worker, installation and compilation were performed in a temporary copy under `/tmp` to keep dependency directories outside the submission. A normal checkout can use the commands above. Dependencies, caches, browser binaries and source maps are not part of the export.
+The existing package manifest, lockfile and Vite configuration are unchanged. On this worker, installation and compilation were performed in a temporary copy under `/tmp` to keep dependency directories outside the submission. A normal checkout can use the commands above. Dependencies, caches, browser binaries and source maps are not part of the export.
 
 The build writes `dist/` and then generates `dist/imd-deployment.json`. From the repository root, `node web/scripts/check-export.mjs` verifies the exact deployment handoff, unchanged network/wallet blocks, canonical ABI hashes and complete SHA-256 asset inventory. Run it with Node able to resolve the installed `web` dependencies (the script itself resides beside those dependencies).
 
@@ -44,7 +44,7 @@ Letterbox’s immutable internal constants are named in `models.ts` with source 
 
 EIP-6963 discovery and injected wallets share one connect sheet. Mobile deep links open the page in the wallet app. The Coinbase SDK connector is removed; Coinbase’s injected extension and mobile link remain. An unknown chain is added with the supplied `walletAddChain`, then switched again. The connected control links to Profile; Profile provides Disconnect.
 
-Reads use bounded 6-second transports, five-call HTTP batches, shared 60-second endpoint cooldown and Multicall3. Visible tabs check blocks every 12 seconds. Snapshots refresh on relevant events, receipts or after 60 seconds; failures back off to 15/30/60 seconds. A receipt refresh queues behind an active poll. Old data survives background refresh and a transient failure. Time-driven states use the chain timestamp plus elapsed local time.
+Reads use bounded 6-second transports, five-call HTTP batches and Multicall3. Log requests are unbatched. Typed transport failures cool down an endpoint for 60 seconds; coded request answers do not. HTTP error bodies survive classification, Sentio’s 1,000-block limit is learned explicitly, head lag never changes the session chunk size, and a partial scan retains its completed prefix. If every endpoint is cooling, the client still asks them in recovery order. Try again, online and tab visibility reset endpoint health. Visible tabs check blocks every 12 seconds. Snapshots refresh on relevant events, receipts or after 60 seconds; failures back off to 15/30/60 seconds. A receipt refresh queues behind an active poll. Old data survives background refresh and a transient failure. Time-driven states use the chain timestamp plus elapsed local time.
 
 Every write simulates and estimates first, then sends `ceil(estimate × 1.3)` gas. Buttons stay focusable when unavailable, explain why, distinguish wallet/confirmation waits, and retain receipt feedback until navigation. Errors unwrap PoolManager’s WrappedError and translate every error in the pinned ABIs. There are no unlimited approvals.
 
@@ -52,7 +52,7 @@ A claimed allocation must have string index and amount (decimal or hex), a valid
 
 ## Validation
 
-`FIXES.md` maps all 73 review references. `VALIDATION.md` records the final checks and limitations. The `run9-*.mjs` scripts accept a Playwright module through `IMD_PLAYWRIGHT`; browser binaries can live outside the repository. `PLEA_AXE` can name the installed axe script. Reports and screenshots go only to `test/scratch/`.
+`FIXES.md` maps all 45 round-2 references and preserves the historical round-1 ledger. `VALIDATION.md` records the final checks and limitations. The `run9-*.mjs` scripts accept a Playwright module through `IMD_PLAYWRIGHT`; browser binaries can live outside the repository. `PLEA_AXE` can name the installed axe script. Reports and screenshots go only to `test/scratch/`.
 
 ```sh
 # Read-only browser matrix; PLEA_QA_RPC is an optional local read-through override.
@@ -83,3 +83,26 @@ IMD_PLAYWRIGHT=/path/to/playwright/index.mjs PLEA_REVISION_MATRIX=1 node web/scr
 ```
 
 `PLEA_REVISION_MATRIX=1` adds the 180-run affected-state browser/axe sweep at five widths, both themes and wallet states. `PLEA_AXE` may specify an external axe script; otherwise it uses the locked frontend dependency. The normal mode checks the interactions and state assertions without the full matrix. `PLEA_EXPECT_OLD=1` is available to reproduce the old behavior against an export built before these repairs. Reports/screenshots remain under disposable `test/scratch/fork/`.
+
+## Round-2 checks and shared state
+
+`rpc-health.ts` classifies errors from their cause chain. `models.ts:feeDisplay` formats fee parts once and derives consistent displayed totals; `chain.ts` owns `caseState`, `seasonState`, `countedPleas`, `noVerdict`, `feeInPlea` and the shared open-plea timing. `sale.ts` shares the live sale quote between Home and the case page. `useTx` replays a mined revert at its receipt block before translating it.
+
+The new checks require a separate Playwright installation (`IMD_PLAYWRIGHT`) and Chromium binaries (`PLAYWRIGHT_BROWSERS_PATH` when installed externally). `PLEA_AXE` can name the locked axe script. Fork writes accept loopback only; they never sign or send public-chain transactions. All reports go to `test/scratch/`.
+
+```sh
+# After prepare + primary, before court changes its six pleas:
+PLEA_REVISION_MATRIX=1 node web/scripts/revision-court.mjs
+# After primary/court, while the Cabal is alive; this fixture restores its snapshot:
+PLEA_REVISION_MATRIX=1 node web/scripts/round2-fork.mjs
+node web/scripts/round2-mined-revert.mjs
+# Read-only faults and keyboard checks; set PLEA_QA_RPC to an authorized read-through RPC:
+node web/scripts/round2-rpc.mjs
+node web/scripts/round2-layout.mjs
+# Seeded fork, read-only decimal/cost/loading interaction sweep:
+node web/scripts/round2-buy.mjs
+```
+
+`round2-fork` creates seat records, intermediate waiting seasons, void/pending/sustained objections and older Wall cards, then tests them at five widths in both themes with and without a wallet. `round2-mined-revert` deliberately moves the pool between simulation and signing on the fork and checks replayed PriceLimitAlreadyExceeded. The death script checks PoolManager proceeds separately from cashback. The scripts use ephemeral signers and restore isolated fixture snapshots where documented; run the death fixture last among the season scenarios.
+
+The worker’s final check results and remaining untested external behavior are in `VALIDATION.md`. Runtime addresses, ABIs and network data still load from the hashed static export; the fork RPC is a QA override only.

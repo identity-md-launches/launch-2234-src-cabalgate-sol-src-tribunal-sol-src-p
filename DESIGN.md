@@ -76,8 +76,24 @@ Keep the two pinned CSS files unchanged. Do not invent balances, histories, fees
 
 For another route, add a React page to the hash-router switch, compose the shared components, connect existing runtime reads and simulate every write. Recheck mobile reflow, keyboard focus, both themes, long values, failure states, and regenerate the asset manifest after the final build.
 
-## Court and recording states in this revision
+## Preserved court and recording states
 
 The 24-card Wall page is a presentation limit. Home’s latest-verdict card, objection cases and totals use a separate complete-history model in `web/src/chain.ts`; loading older active cases does not enlarge the initial card grid. The connected seat notice uses a direct `holdsSeat` read even before the holder records a plea.
 
-An unrecorded eligible approval from a closed season uses “Not recorded” and a plain sentence identifying that season. Its disabled Record action explains that recording is closed. The sale summary, detail card and timeline use the same missed-deadline state, including sold appeals and lapsed approvals. An unresolved season-status read keeps the action unavailable with a loading/error explanation. Existing token colors, typography, spacing, buttons and panel hierarchy are preserved; no new CSS or visual tokens were introduced. Current rendered coverage and limits are recorded in `VALIDATION.md`.
+An unrecorded eligible approval from a closed season uses “Not recorded” and a plain sentence identifying that season. Its disabled Record action explains that recording is closed. The sale summary, detail card and timeline use the same missed-deadline state, including sold appeals and lapsed approvals. An unresolved season-status read keeps the action unavailable with a loading/error explanation. Existing token colors, typography, spacing, buttons and panel hierarchy are preserved; the round-2 additions below continue those visual tokens. Current rendered coverage and limits are recorded in `VALIDATION.md`.
+
+## Round-2 components and responsive states
+
+The pinned token files remain byte-for-byte unchanged. New rules live in `web/src/site.css`, use existing tokens and port the Home/Wall/Seasons page rules. At 320–359 px the hero uses the existing `--text-3xl` token so “Buying is open.” remains a single line. At 360 px and above it uses the pinned hero token, with the mockup’s 4 px gutter allowance below 400. Numeric Home values and pair symbols have separate nowrap spans; quote summaries and future-date pills may wrap between words. Numbers retain tabular figures and do not split inside their digits.
+
+`Panel` accepts `flush`, `meta`, `id` and heading level. A flush panel renders `.panel__head` and `.panel__body.stack`; padding is 16 px on phones and 24 px from 768. `Costs` rows carry an optional `part` or `total` kind, so inserting a row preserves the correct hierarchy. `Title.aside` groups profile badges with its h1. `AddressView.shortDisplay` shortens only the visible address; the explorer and Copy retain the checksum address. `Empty` accepts one or several link/button actions.
+
+`AmountInput.loading` renders the kit skeleton with aria-busy. `Action`, `TxButton` and `ApprovedAction` require call-site connect text; `lockedReason` explains an unavailable action to every viewer, and `srLabel` distinguishes otherwise identical Record buttons. Error titles are bold inline with an optional explanatory body. Pending, confirmed and failed receipts have distinct link labels. Unavailable controls stay focusable and guard activation.
+
+Hero and Wall share `PleaFoot`: only approved-family pleas can display season points. Hero uses the shared sale quote and an XL stamp, with fact values separate from their points. `FactCells` is a labelled group with historical values on a plea and live values on Plead/Profile; missing archive data is explicitly “no data”. No-verdict, objection closure and sustained points are shared contract-derived states, not page-local wording.
+
+Seasons uses the pinned 8/4/4 medium and 4/4/4 large grid spans for its three summaries. Every ended season remains reachable: the oldest is expanded; intermediate seasons use native details with on-demand reads and h3 panel headings. The displayed season has the only `#seat` panel. Standing stats wrap as a cluster, counted seat scores omit empty slots, and final leftovers consistently name the buy wall. Past seasons are article panels with a heading/Closed cluster, payout and top-wallet columns.
+
+Loading bands have each route’s real title and state labels, with Home stats/hero and a row of Wall skeleton cards. The routed error boundary keeps navigation and footer available if rendering fails. Deferred hash anchors wait for their actual section and stop after user input or 20 seconds.
+
+Final rendered coverage: 320/360/390/768/1280 in both themes, disconnected and connected, including populated fork cases and two waiting seasons. Keyboard/ring checks covered Home, Contracts and Claim at 320/360/1280 in both themes; screenshot inspection confirmed the padded dark Contracts Copy ring. The pinned taste probe also covered 1440. Exact commands, findings and limitations are in `VALIDATION.md`.

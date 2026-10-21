@@ -86,10 +86,10 @@ test("out-of-liquidity estimates fail instead of returning a partial quote", () 
 test("custom error data and wallet rejection become plain remedies", () => {
   const abi = parseAbi(["error CannotPass(uint256 need)"]);
   const data = encodeErrorResult({ abi, errorName: "CannotPass", args: [50n] });
-  assert.match(explainError({ cause: { data } }, [abi]), /cannot pass/);
-  assert.match(explainError({ code: 4001 }), /declined/);
+  assert.match(explainError({ cause: { data } }, [abi]).title, /cannot pass/);
+  assert.match(explainError({ code: 4001 }).title, /declined/);
   assert.match(
-    explainError({ message: "insufficient funds for gas" }),
+    explainError({ message: "insufficient funds for gas" }).title,
     /Sepolia ETH/,
   );
 });

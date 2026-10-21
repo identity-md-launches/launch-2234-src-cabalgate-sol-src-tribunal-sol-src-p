@@ -1,3 +1,4 @@
+import { rpcDetail, rangePattern, headPattern } from "./rpc-health";
 import { potFor, factParts, sharePoints, ceil, min } from "./models";
 import {
   decodeEventLog,
@@ -35,6 +36,7 @@ export type Plea = {
   objections?: any[];
   completed?: boolean;
   failure?: any;
+  failureAt?: number;
   balance?: bigint;
   facts?: any;
   submittedLog?: any;
@@ -47,6 +49,7 @@ export type Snapshot = {
   pleas: Plea[];
   court: CourtHistory;
   block: bigint;
+  head?: bigint;
   timestamp: number;
   historyError?: string;
 };
@@ -88,54 +91,48 @@ export async function readStatic(r: Runtime) {
   ]);
   return { ...c, symbol, decimals, pairSymbol, pairDecimals };
 }
-// Every request covers at most 10,000 blocks. Limit errors shrink the range, never discard it.
+// Keep successful prefixes so a temporary outage never restarts a whole history scan.
 let logChunk = 10000n;
-export async function scanLogs(
-  r: Runtime,
-  from: bigint,
-  to: bigint,
-): Promise<any[]> {
-  if (from > to) return [];
+export async function scanLogs(r: Runtime, from: bigint, to: bigint) {
   const logs: any[] = [];
-  async function chunk(a: bigint, b: bigint): Promise<any[]> {
+  let covered = from - 1n,
+    error: unknown;
+  async function chunk(a: bigint, b: bigint, retry = 0): Promise<void> {
     try {
-      return await r.client.getLogs({
+      const batch = await r.client.getLogs({
         address: Object.entries(r.addresses)
           .filter(([n]) => n !== "PairToken")
           .map(([, a]) => a),
         fromBlock: a,
         toBlock: b,
       });
+      logs.push(...batch);
+      covered = b;
     } catch (e) {
-      const error: any = e;
-      const detail = [
-        error?.shortMessage,
-        error?.message,
-        error?.details,
-        error?.cause?.details,
-        error?.body,
-        error?.cause?.body,
-      ].join(" ");
-      const limit = detail.match(/limited to ([\d,]+) blocks/i);
-      if (limit) logChunk = BigInt(limit[1].replaceAll(",", ""));
-      if (
-        a === b ||
-        !/block range|too many results|range.*(?:limit|large)|query returned|response size|10,000|maximum.*block|exceed.*block|limited to .* blocks/i.test(
-          detail,
-        )
-      )
-        throw e;
-      if (!limit) logChunk = (b - a + 1n) / 2n || 1n;
-      const mid = (a + b) / 2n;
-      return [...(await chunk(a, mid)), ...(await chunk(mid + 1n, b))];
+      const { text } = rpcDetail(e);
+      if (headPattern.test(text)) {
+        if (retry >= 3) throw e;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        return chunk(a, b, retry + 1);
+      }
+      const limit = text.match(/limited to ([\d,]+) blocks/i);
+      if (limit) logChunk = BigInt(limit[1].replaceAll(",", "")) || 1n;
+      if (a === b || !rangePattern.test(text)) throw e;
+      const size = limit ? logChunk : (b - a + 1n) / 2n || 1n;
+      for (let k = a; k <= b; k += size)
+        await chunk(k, k + size - 1n > b ? b : k + size - 1n);
     }
   }
-  for (let a = from; a <= to;) {
-    const end = a + logChunk - 1n > to ? to : a + logChunk - 1n;
-    logs.push(...(await chunk(a, end)));
-    a = end + 1n;
+  try {
+    for (let a = from; a <= to;) {
+      const end = a + logChunk - 1n > to ? to : a + logChunk - 1n;
+      await chunk(a, end);
+      a = end + 1n;
+    }
+  } catch (e) {
+    error = e;
   }
-  return logs.map((log) => {
+  const decoded = logs.map((log) => {
     const name = Object.keys(r.addresses).find(
       (n) => r.addresses[n].toLowerCase() === log.address.toLowerCase(),
     );
@@ -153,6 +150,7 @@ export async function scanLogs(
       return { ...log, contract: name, eventName: "Unknown", args: {} };
     }
   });
+  return { logs: decoded, covered, error };
 }
 export async function getPlea(
   r: Runtime,
@@ -196,19 +194,27 @@ export async function getPlea(
     verdictLog: logs.find((l) => l.eventName === "Verdict" && l.args.id === id),
     standing,
     recorded,
-    points: recorded
-      ? await read(r, "Seasons", "pointsOf", [id])
-      : excluded || standing[1]
-        ? 0
-        : await read(r, "Seasons", "pointsFor", [
-            p.seller,
-            Math.min(p.score, Number(standing[2])),
-          ]),
+    points: ![2, 4, 5].includes(p.status)
+      ? 0
+      : recorded
+        ? await read(r, "Seasons", "pointsOf", [id])
+        : excluded || standing[1]
+          ? 0
+          : await read(r, "Seasons", "pointsFor", [
+              p.seller,
+              Math.min(p.score, Number(standing[2])),
+            ]),
     excluded,
     name,
     seat,
     escrow,
     objections,
+    failureAt: await (async () => {
+      const log = logs.find(
+        (l) => l.eventName === "PleaFailed" && l.args.id === id,
+      );
+      return log ? blockTime(r, log.blockNumber) : undefined;
+    })(),
     failure: logs.find((l) => l.eventName === "PleaFailed" && l.args.id === id)
       ?.args,
   };
@@ -322,21 +328,15 @@ export async function readSnapshot(
       read(r, "Seasons", "shareBps", [BigInt(i)]),
     ),
   );
-  let logs = previous?.logs || [],
-    historyError: string | undefined;
-  try {
-    logs = [
-      ...logs,
-      ...(await scanLogs(
-        r,
-        previous ? previous.block + 1n : APP.eventStart,
-        block.number,
-      )),
-    ];
-  } catch {
-    historyError =
-      "History could not be read completely. Try again; court and cashback totals are hidden until the scan completes.";
-  }
+  const scan = await scanLogs(
+    r,
+    previous ? previous.block + 1n : APP.eventStart,
+    block.number,
+  );
+  const logs = [...(previous?.logs || []), ...scan.logs];
+  const historyError = scan.error
+    ? "History could not be read completely. Try again; court and cashback totals are hidden until the scan completes."
+    : undefined;
   const next = v["CabalGate.nextId"];
   const ids = Array.from(
     { length: Math.min(Number(next - 1n), 24) },
@@ -377,9 +377,8 @@ export async function readSnapshot(
     logs,
     pleas,
     court,
-    block: historyError
-      ? (previous?.block ?? APP.eventStart - 1n)
-      : block.number,
+    block: scan.covered,
+    head: block.number,
     timestamp: Number(block.timestamp),
     historyError,
   };
@@ -690,17 +689,21 @@ export function seasonState(s: Snapshot | undefined, now: number) {
   if (!s || !val(s, "CabalGate.startedAt")) return undefined;
   const displayed = BigInt(s.v.displayedSeason),
     next = BigInt(s.v["Seasons.nextToClose"]),
+    dead = !!s.v["CabalGate.diedAt"],
     current = s.v.seasons[String(displayed)],
     waiting = s.v.seasons[String(next)];
+  const lastEnded =
+    dead || now >= Number(current?.bounds[2]) ? displayed : displayed - 1n;
+  const awaitingAll: bigint[] = [];
+  for (let k = next; k <= lastEnded; k++)
+    if (!s.v.seasons[String(k)]?.closed) awaitingAll.push(k);
   return {
     displayed,
     next,
     current,
-    dead: !!s.v["CabalGate.diedAt"],
-    awaiting:
-      waiting?.bounds[0] && now >= Number(waiting.bounds[2]) && !waiting.closed
-        ? next
-        : undefined,
+    dead,
+    awaitingAll,
+    awaiting: awaitingAll[0],
     closeFrom:
       Number(waiting?.bounds[2]) + Number(con(s, "Seasons.CLOSE_GRACE")),
     pot: current?.pot || 0n,
@@ -782,6 +785,7 @@ async function historicalFacts(
           return parts;
         } catch {
           return {
+            shareBps: balance ? ceil(p.amount * 10000n, balance) : null,
             share: balance ? sharePoints(ceil(p.amount * 10000n, balance)) : 0,
             total: -1,
           };
@@ -804,4 +808,148 @@ export async function readPlea(r: Runtime, id: bigint, intake?: Address) {
     p.completed = result[3];
   }
   return p;
+}
+
+export const pct = (bps: number | bigint) =>
+  (Number(bps) / 100).toFixed(2) + "%";
+export const signedPercent = (percent: number, digits = 1) =>
+  `${percent > 0 ? "+" : percent < 0 ? "−" : ""}${Math.abs(percent).toFixed(digits)}%`;
+export function openPleaNotice(p: any, s: Snapshot, now: number) {
+  if (p.status === 1)
+    return `Plea #${p.id ?? ""} is open: waiting for the verdict, usually 3 to 6 minutes.`;
+  const cooldown = Number(con(s, "CabalGate.COOLDOWN"));
+  return `Sell by ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")))}. Next plea ${span(cooldown)} after the sale (${clock(now + cooldown)} if sold now), or ${clock(Number(p.verdictAt) + cooldown)} if it lapses.`;
+}
+export function caseState(p: Plea, s: Snapshot, now: number) {
+  const objections = p.objections || [],
+    max = Number(con(s, "Tribunal.MAX_OBJECTIONS") ?? 2);
+  const filed = objections.filter((o) => [1, 2, 3].includes(o.ruling)).length;
+  const rulings = objections.filter((o) => [2, 3].includes(o.ruling)).length;
+  const sustained = objections.find((o) => o.ruling === 2);
+  const end = Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW"));
+  const closed =
+    sustained || p.standing?.[1]
+      ? `objection #${sustained?.id ?? ""} was sustained`
+      : rulings >= max
+        ? "both objections were ruled"
+        : p.recorded
+          ? "the points were recorded"
+          : p.excluded
+            ? "the seller is excluded"
+            : now > end
+              ? `at ${clock(end)}`
+              : undefined;
+  return {
+    filed,
+    closed,
+    full: !closed && filed >= max,
+    end,
+    max,
+    pending: objections.filter((o) => o.ruling === 1),
+  };
+}
+export const caseClosedText = (closed: string) =>
+  closed.startsWith("at ")
+    ? `Objections closed ${closed}`
+    : `Objections closed: ${closed}`;
+export function noVerdict(p: Plea, s: Snapshot) {
+  const failure = p.failure,
+    log = s.logs.find(
+      (l) => l.eventName === "PleaFailed" && l.args.id === p.id,
+    );
+  const sub =
+    failure?.status === 1
+      ? "request refused"
+      : failure?.answered
+        ? `panel split ${failure.agreed}/${failure.answered}`
+        : "no answer";
+  const sentence =
+    sub === "request refused"
+      ? "The request was refused."
+      : failure?.answered
+        ? `The panel split: ${failure.agreed} of ${failure.answered} agreed (${con(s, "CabalGate.QUORUM")} needed).`
+        : `No answer within ${span(Number(con(s, "CabalGate.PENDING_EXPIRY")))}.`;
+  return {
+    sub,
+    sentence,
+    time:
+      p.failureAt ??
+      log?.timestamp ??
+      Number(p.submittedAt) + Number(con(s, "CabalGate.PENDING_EXPIRY")),
+    reported: !!log,
+  };
+}
+export function countedPleas(
+  s: Snapshot,
+  season: bigint,
+  wallet: string,
+  best: number[],
+) {
+  if (s.historyError) return undefined;
+  const records = s.logs
+    .filter(
+      (l) =>
+        l.eventName === "Recorded" &&
+        BigInt(l.args.season) === season &&
+        l.args.wallet.toLowerCase() === wallet.toLowerCase(),
+    )
+    .sort((a, b) => Number(a.args.pleaId - b.args.pleaId));
+  const used = new Set();
+  const result = best.filter(Number).map((value) => {
+    const log = records.find((l) => {
+      const seat = s.logs.find(
+        (x) =>
+          x.eventName === "SeatMultiplier" && x.args.pleaId === l.args.pleaId,
+      );
+      return (
+        !used.has(l.args.pleaId) &&
+        Number(seat?.args.pleaPoints ?? l.args.score) === Number(value)
+      );
+    });
+    if (!log) return undefined;
+    used.add(log.args.pleaId);
+    return {
+      pleaId: log.args.pleaId,
+      score: Number(log.args.score),
+      multiplied: s.logs.some(
+        (x) =>
+          x.eventName === "SeatMultiplier" && x.args.pleaId === log.args.pleaId,
+      ),
+    };
+  });
+  return result.some((x) => !x)
+    ? undefined
+    : (result as { pleaId: bigint; score: number; multiplied: boolean }[]);
+}
+export function feeInPlea(s: Snapshot | undefined, fee: bigint) {
+  const price = BigInt(val(s, "PleaHook.latestPrice") || 0);
+  if (!s || !val(s, "PleaHook.seeded") || !price) return undefined;
+  return ceil(
+    ceil(fee * 2n ** 96n, price) * 10000n,
+    10000n -
+      BigInt(con(s, "PleaHook.IMD_FEE_BPS")) -
+      BigInt(con(s, "PleaHook.PLEA_BURN_BPS")),
+  );
+}
+export const feeInPleaText = (s: Snapshot | undefined, fee: bigint) => {
+  const value = feeInPlea(s, fee);
+  return value === undefined
+    ? "after trading opens"
+    : `about ${tokenAmount(value, s, false, 0, "up")}`;
+};
+const blockTimes = new Map<string, Promise<number>>();
+export function blockTime(r: Runtime, number: bigint) {
+  const key = String(number);
+  if (!blockTimes.has(key))
+    blockTimes.set(
+      key,
+      r.client
+        .getBlock({ blockNumber: number })
+        .then((b) => Number(b.timestamp))
+        .catch((e) => {
+          blockTimes.delete(key);
+          throw e;
+        }),
+    );
+  return blockTimes.get(key)!;
 }

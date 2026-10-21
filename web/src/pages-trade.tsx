@@ -1,5 +1,7 @@
+import { DisplayError } from "./errors";
 import {
   pendingState,
+  feeDisplay,
   LETTERBOX,
   Q96,
   ceil,
@@ -28,9 +30,14 @@ import {
   type Address,
 } from "viem";
 import { useApp, useRead, useTx, receiptEvents } from "./context";
-import { APP, erc20Abi, swapAbi, quoterAbi } from "./config";
+import { APP, erc20Abi, swapAbi, quoterAbi, resetHealth } from "./config";
 import {
   amount,
+  pct,
+  signedPercent,
+  openPleaNotice,
+  feeInPlea,
+  feeInPleaText,
   clock,
   span,
   smallAmount,
@@ -120,7 +127,7 @@ export function WalletBalances() {
         ? await readPlea(r, pending, val(s, "CabalGate.intake"))
         : undefined;
       return {
-        pendingPlea,
+        pendingPlea: pendingPlea ? { ...pendingPlea, id: pending } : undefined,
         plea,
         pair,
         basis,
@@ -153,6 +160,13 @@ export function WalletBalances() {
       data: {
         ...result.data,
         ...state,
+        cooldownCause:
+          Number(result.data.executed) >=
+          Math.max(Number(result.data.denied), state.lapsedAt)
+            ? "sale"
+            : Number(result.data.denied) >= state.lapsedAt
+              ? "denied plea"
+              : "plea lapsed",
         cooldown:
           Math.max(
             Number(result.data.executed),
@@ -226,7 +240,9 @@ export function Buy() {
         ),
       )
     : 0n;
-  const quote = useRead(
+  const tradeDone = tx.done && !approved;
+  const [frozenQuote, setFrozenQuote] = useState<any>();
+  const liveQuote = useRead(
     async () => {
       const key = val(s, "PleaHook.poolKey"),
         zeroForOne = key.currency0.toLowerCase() === inputToken.toLowerCase(),
@@ -236,9 +252,13 @@ export function Buy() {
       const estimate = await poolQuote(r, s!, raw, selling, extra);
       return { ...estimate, key, zeroForOne, hookData, at: Date.now() };
     },
-    [raw.toString(), selling, address, slip],
-    !!s && raw > 0n && !!val(s, "PleaHook.seeded"),
+    [raw.toString(), selling, address, slip, revision],
+    !!s && raw > 0n && !!val(s, "PleaHook.seeded") && !tradeDone,
   );
+  const quote =
+    tradeDone && frozenQuote
+      ? { ...liveQuote, data: frozenQuote, loading: false, error: "" }
+      : liveQuote;
   const allowance = useRead(
     () =>
       r.client.readContract({
@@ -253,23 +273,29 @@ export function Buy() {
   const needsApproval = allowance.data !== undefined && allowance.data < raw;
   const cap = con(s, "PleaHook.LAUNCH_MAX_BUY"),
     capError =
-      launchActive && !selling && quote.data && quote.data.gross > cap
-        ? `This buy would take ${tokenAmount(quote.data.gross, s)} before the burn, above the ${tokenAmount(cap, s)} launch cap. Lower the amount or wait until ${clock(launch + window)}.`
+      !tradeDone &&
+      launchActive &&
+      !selling &&
+      quote.data &&
+      quote.data.gross > cap
+        ? `This buy would take ${tokenAmount(quote.data.gross, s)} before the burn. Until ${clock(launch + window)} one buy can take at most ${tokenAmount(cap, s)}. Pay less ${pair}, or split the buy in two.`
         : "";
-  const invalid = available !== undefined && raw > available;
+  const invalid =
+    !tradeDone && ((available !== undefined && raw > available) || !!capError);
   const amountReason = !val(s, "PleaHook.seeded")
     ? "Trading is not open yet."
     : raw <= 0n
       ? `Enter how much ${unit} to ${selling ? "sell" : "pay"}, or press Max. The quote and the fees show once there is an amount.`
-      : invalid
+      : available !== undefined && raw > available
         ? `You have ${tokenAmount(available, s, !selling)}. Lower the amount or press Max.`
         : capError;
-  const reason =
-    amountReason ||
-    (!needsApproval
-      ? quote.error ||
-        (!quote.data ? "Waiting for the quote from the pool." : "")
-      : "");
+  const reason = tradeDone
+    ? ""
+    : amountReason ||
+      (!needsApproval
+        ? quote.error ||
+          (!quote.data ? "Waiting for the quote from the pool." : "")
+        : "");
   const minOut = quote.data
     ? (quote.data.out * BigInt(10000 - slip)) / 10000n
     : undefined;
@@ -306,6 +332,21 @@ export function Buy() {
     [raw.toString(), selling],
     !!s && raw > 0n && !selling,
   );
+  const capMessage = {
+    title: `Not bought: more than ${tokenAmount(cap, s)} in one buy.`,
+    body: `Until ${clock(launch + window)} one buy can take at most ${tokenAmount(cap, s)}. Pay less ${pair}, or split the buy in two. Nothing was bought.`,
+  };
+  const priceMessage = {
+    title: `The price moved more than ${slip / 100}%.`,
+    body: `Nothing was ${selling ? "sold" : "bought"}; your ${unit} stays in your wallet. Try again, or ${slip >= 200 ? "lower the amount." : `raise the slippage to ${slip < 100 ? 1 : 2}%.`}`,
+  };
+  const swapErrors = {
+    BuyTooLarge: capMessage,
+    PriceLimitAlreadyExceeded: priceMessage,
+  };
+  const display = s
+    ? feeDisplay(raw, s.constants, extra, dead, input || undefined)
+    : undefined;
   async function buy() {
     if (needsApproval) {
       setApproved(true);
@@ -323,14 +364,13 @@ export function Buy() {
             }),
           },
           {
+            errors: swapErrors,
             prepare:
               launchActive && !selling
                 ? async () => {
                     const q = await poolQuote(r, s!, raw, false);
                     if (q.gross > BigInt(cap))
-                      throw Error(
-                        `This buy exceeds the ${tokenAmount(cap, s)} launch cap. Lower the amount or wait until ${clock(launch + window)}.`,
-                      );
+                      throw new DisplayError(capMessage);
                   }
                 : undefined,
           },
@@ -341,6 +381,7 @@ export function Buy() {
     }
     setApproved(false);
     await tx.send("", "swap", [], undefined, {
+      errors: swapErrors,
       prepare: async () => {
         const q = await poolQuote(r, s!, raw, selling),
           key = val(s, "PleaHook.poolKey"),
@@ -365,10 +406,8 @@ export function Buy() {
         });
         const delta = unpackDelta(simulation.result),
           spent = -(zeroForOne ? delta[0] : delta[1]);
-        if (spent < raw)
-          throw Error(
-            `The price moved more than ${slip / 100}%. Nothing was ${selling ? "sold" : "bought"}; your ${unit} stays in your wallet. Try again, or raise the slippage to ${slip < 100 ? 1 : 2}%.`,
-          );
+        if (spent < raw) throw new DisplayError(priceMessage);
+        setFrozenQuote({ ...q, at: Date.now() });
         return {
           to: APP.swapRouter,
           data: encodeFunctionData({
@@ -416,7 +455,10 @@ export function Buy() {
           .filter(
             (l) =>
               l.address.toLowerCase() === outToken.toLowerCase() &&
-              l.args.to.toLowerCase() === address?.toLowerCase(),
+              l.args.to.toLowerCase() === address?.toLowerCase() &&
+              (!selling ||
+                l.args.from.toLowerCase() ===
+                  r.network.uniswapV4.poolManager.toLowerCase()),
           )
           .reduce((n, l) => n + l.args.value, 0n);
         const text = selling
@@ -486,7 +528,7 @@ export function Buy() {
             }}
             unit={unit}
             invalid={invalid}
-            hint={invalid ? amountReason : undefined}
+            hint={invalid ? capError || amountReason : undefined}
             aside={
               address ? (
                 <>
@@ -512,6 +554,12 @@ export function Buy() {
           />
           <AmountInput
             id="quote"
+            loading={quote.loading && !quote.data}
+            hint={
+              quote.loading && !quote.data
+                ? "Waiting for the quote from the pool."
+                : undefined
+            }
             label="You get (quote)"
             value={
               quote.data
@@ -555,79 +603,75 @@ export function Buy() {
               ))}
             </div>
           </div>
-          {raw > 0n && s && (
+          {raw > 0n && s && !tradeDone && display && (
             <>
               <Costs
-                parts={!selling ? [2, 3, 4, 5, 6] : []}
                 rows={[
+                  ...(!selling
+                    ? ([
+                        [
+                          "Price",
+                          `1M PLEA = ${tokenAmount((BigInt(val(s, "PleaHook.priceX96") || 0) * 10n ** 24n) / Q96, s, true)}`,
+                        ],
+                      ] as [string, string][])
+                    : []),
                   [
                     `Minimum, ${slip / 100}% slippage`,
                     minOut !== undefined
                       ? tokenAmount(minOut, s, selling)
                       : "Waiting for the quote",
                   ],
+                  ...(!selling
+                    ? ([["Reaches the pool", `${display.reaches} ${pair}`]] as [
+                        string,
+                        string,
+                      ][])
+                    : []),
                   [
-                    "Fees, " +
-                      (Number(normal) +
-                        Number(con(s, "PleaHook.PLEA_BURN_BPS"))) /
-                        100 +
-                      "%",
+                    `Fees, ${pct(normal + BigInt(con(s, "PleaHook.PLEA_BURN_BPS")))}`,
                     selling
-                      ? `${Number(normal) / 100}% of the ${pair} + ${Number(con(s, "PleaHook.PLEA_BURN_BPS")) / 100}% of the PLEA`
-                      : `${tokenAmount((reaches * normal) / 10000n, s, true, 2, "up")} + ${Number(con(s, "PleaHook.PLEA_BURN_BPS")) / 100}% of the PLEA`,
+                      ? `${pct(normal)} of the ${pair} + ${pct(con(s, "PleaHook.PLEA_BURN_BPS"))} of the PLEA`
+                      : `${display.fees} ${pair} + ${pct(con(s, "PleaHook.PLEA_BURN_BPS"))} of the PLEA`,
+                    "total",
                   ],
                   ...((!selling
                     ? [
                         [
-                          `Back to you as cashback (${Number(con(s, "PleaHook.CASHBACK_BPS")) / 100}%)`,
+                          `Back to you as cashback (${pct(con(s, "PleaHook.CASHBACK_BPS"))})`,
                           payout.data === "pool"
                             ? "none on this opening buy: the cashback, owner and prize shares join the pool"
-                            : `${smallAmount(cashbackNow, s)}${payout.data === "claims" ? ", paid as a claim on the PoolManager (see Profile)" : ""}`,
+                            : `${display.cash} ${pair}${payout.data === "claims" ? ", paid as a claim on the PoolManager (see Profile)" : ""}`,
+                          "part",
                         ],
                         [
-                          `Owner (${Number(con(s, "PleaHook.OWNER_BPS")) / 100}%)`,
-                          tokenAmount(feePart("OWNER_BPS"), s, true, 2, "up"),
+                          `Owner (${pct(con(s, "PleaHook.OWNER_BPS"))})`,
+                          `${display.owner} ${pair}`,
+                          "part",
                         ],
                         ...(!dead
                           ? [
                               [
-                                `Season prize pot (${Number(con(s, "PleaHook.PRIZE_BPS")) / 100}%)`,
-                                tokenAmount(
-                                  feePart("PRIZE_BPS"),
-                                  s,
-                                  true,
-                                  3,
-                                  "up",
-                                ),
+                                `Season prize pot (${pct(con(s, "PleaHook.PRIZE_BPS"))})`,
+                                `${display.prize} ${pair}`,
+                                "part",
                               ],
                             ]
                           : []),
                         [
-                          `Buy wall (${(Number(con(s, "PleaHook.POOL_BPS")) + (dead ? Number(con(s, "PleaHook.PRIZE_BPS")) : 0)) / 100}%)`,
-                          tokenAmount(
-                            feePart("POOL_BPS") +
-                              (dead ? feePart("PRIZE_BPS") : 0n),
-                            s,
-                            true,
-                            3,
-                            "up",
-                          ),
+                          `Buy wall (${pct(BigInt(con(s, "PleaHook.POOL_BPS")) + (dead ? BigInt(con(s, "PleaHook.PRIZE_BPS")) : 0n))})`,
+                          `${display.wall} ${pair}`,
+                          "part",
                         ],
                         [
-                          "Burned",
-                          `${Number(con(s, "PleaHook.PLEA_BURN_BPS")) / 100}% of the PLEA`,
+                          `Burned (${pct(con(s, "PleaHook.PLEA_BURN_BPS"))})`,
+                          `${pct(con(s, "PleaHook.PLEA_BURN_BPS"))} of the PLEA`,
+                          "part",
                         ],
-                        ...(extra > 0n
+                        ...(extra
                           ? [
                               [
-                                `Launch fee (${Number(extra) / 100}%), to the buy wall`,
-                                tokenAmount(
-                                  fee - (reaches * normal) / 10000n,
-                                  s,
-                                  true,
-                                  2,
-                                  "up",
-                                ),
+                                `Launch fee (${(Number(extra) / 100).toFixed(1)}%), to the buy wall`,
+                                `${display.launch} ${pair}`,
                               ],
                             ]
                           : []),
@@ -635,18 +679,19 @@ export function Buy() {
                     : [["Plea needed", "none, the Cabal is dead"]]) as [
                     string,
                     string,
+                    ("part" | "total")?,
                   ][]),
                 ]}
               />
               {!selling && (
                 <p className="small">
-                  {tokenAmount(reaches, s, true)} reaches the pool +{" "}
-                  {tokenAmount((reaches * normal) / 10000n, s, true, 2, "up")}{" "}
-                  fees
+                  {display.reaches} {pair} reaches the pool + {display.fees}{" "}
+                  {pair} fees
                   {extra
-                    ? ` + ${tokenAmount(fee - (reaches * normal) / 10000n, s, true, 2, "up")} launch fee`
-                    : ""}{" "}
-                  = {tokenAmount(raw, s, true, 2, "up")} you pay.
+                    ? ` + ${display.launch} ${pair} launch fee`
+                    : ""} = {display.pay} {pair} you pay. The{" "}
+                  {dead ? "three" : "four"} parts add up to {display.fees}{" "}
+                  {pair}.
                 </p>
               )}
             </>
@@ -661,6 +706,18 @@ export function Buy() {
               }
             >
               <p>{quote.error}</p>
+              <div className="btn-row">
+                <button
+                  className="btn btn--sm"
+                  onClick={() => {
+                    resetHealth();
+                    setRevision((n) => n + 1);
+                  }}
+                >
+                  <Icon name="arrow-clockwise" />
+                  Try again
+                </button>
+              </div>
             </Notice>
           )}
           <Action
@@ -685,15 +742,19 @@ export function Buy() {
             connectText={`Connect in the top bar to ${selling ? "sell" : "buy"}.`}
             onRun={buy}
             disabled={!tx.ready || !!reason || allowance.data === undefined}
-            reason={reason}
+            reason={invalid ? undefined : reason}
+            describedBy={invalid ? "pay-hint" : undefined}
           />
-          {address && raw > 0n && (
-            <p className="small">
-              {needsApproval
-                ? `Step 1 of 2: lets the ${selling ? "sale" : "buy"} spend exactly ${tokenAmount(raw, s, !selling)}. Nothing is ${selling ? "sold" : "bought"} yet.`
-                : `One approval for ${unit}, then the ${selling ? "sale" : "buy"}. ${!selling && payout.data !== "pool" ? `${smallAmount(cashbackNow, s)} cashback is paid to you in the same transaction.` : ""}`}
-            </p>
-          )}
+          {address &&
+            raw > 0n &&
+            !tradeDone &&
+            (needsApproval || (!selling && payout.data !== "pool")) && (
+              <p className="small">
+                {needsApproval
+                  ? `Step 1 of 2: lets the ${selling ? "sale" : "buy"} spend exactly ${tokenAmount(raw, s, !selling)}. Nothing is ${selling ? "sold" : "bought"} yet.`
+                  : `${smallAmount(cashbackNow, s)} cashback is paid to you in the same transaction.`}
+              </p>
+            )}
           {fill && <p role="status">{fill}</p>}
           {tx.done && !approved && (
             <button
@@ -701,6 +762,9 @@ export function Buy() {
               onClick={() => {
                 tx.reset();
                 setFill("");
+                setInput("");
+                setMaxRaw(undefined);
+                setFrozenQuote(undefined);
               }}
             >
               Make another trade
@@ -750,8 +814,11 @@ export function Buy() {
           <Panel level={2} title="Your PLEA">
             {address ? (
               <>
-                <p className="stat__value">
-                  {tokenAmount(balance.data?.plea, s)}
+                <p>
+                  <span className="stat__label">Balance</span>
+                  <span className="stat__value">
+                    {tokenAmount(balance.data?.plea, s)}
+                  </span>
                 </p>
                 <p className="label">Your buy record</p>
                 <Costs
@@ -775,12 +842,27 @@ export function Buy() {
                               ? heldTime(now - Number(balance.data.basis[2]))
                               : "No buy record",
                           ],
-                          [
-                            `Now, at ${tokenAmount(val(s, "PleaHook.priceX96") ? (val(s, "PleaHook.priceX96") * 10n ** 24n) / 2n ** 96n : 0n, s, true)} per 1M`,
-                            balance.data.basis[0]
-                              ? `${((Number((balance.data.basis[1] * BigInt(val(s, "PleaHook.priceX96") || 0n)) / 2n ** 96n) * 100) / Number(balance.data.basis[0]) - 100).toFixed(1)}%`
-                              : "No buy record",
-                          ],
+                          ...(val(s, "PleaHook.seeded")
+                            ? ([
+                                [
+                                  `Now, at ${tokenAmount(val(s, "PleaHook.priceX96") ? (val(s, "PleaHook.priceX96") * 10n ** 24n) / 2n ** 96n : 0n, s, true)} per 1M`,
+                                  balance.data.basis[0]
+                                    ? signedPercent(
+                                        (Number(
+                                          (balance.data.basis[1] *
+                                            BigInt(
+                                              val(s, "PleaHook.priceX96") || 0n,
+                                            )) /
+                                            2n ** 96n,
+                                        ) *
+                                          100) /
+                                          Number(balance.data.basis[0]) -
+                                          100,
+                                      )
+                                    : "No buy record",
+                                ],
+                              ] as [string, string][])
+                            : []),
                         ]
                       : []
                   }
@@ -789,12 +871,37 @@ export function Buy() {
                 <p>
                   {dead
                     ? "Nothing more than a swap. No plea and no need: the Cabal is dead, so PLEA sells like any token on Uniswap v4."
-                    : "An approved plea, then a sale within the sell window. Your facts set the need."}
+                    : `A plea. The Cabal scores why you sell. Your hold time and profit or loss above are two of the four facts that set your need (${con(s, "CabalGate.PASS_MARK")} − fact score); a new buy updates both.`}
                 </p>
                 {!dead &&
+                  !!val(s, "PleaHook.seeded") &&
                   (balance.data?.open ? (
                     <>
-                      <p>Plea #{String(balance.data.pending)} is open.</p>
+                      <p className="small">
+                        {balance.data.pendingPlea.status === 2 ? (
+                          <>
+                            <b>
+                              Plea #{String(balance.data.pending)} is open:{" "}
+                              {
+                                openPleaNotice(
+                                  balance.data.pendingPlea,
+                                  s!,
+                                  now,
+                                ).split(". ")[0]
+                              }
+                              .
+                            </b>{" "}
+                            {openPleaNotice(balance.data.pendingPlea, s!, now)
+                              .split(". ")
+                              .slice(1)
+                              .join(". ")}
+                          </>
+                        ) : (
+                          <b>
+                            {openPleaNotice(balance.data.pendingPlea, s!, now)}
+                          </b>
+                        )}
+                      </p>
                       <a
                         className="btn btn--sm"
                         href={`#/p/${balance.data.pending}`}
@@ -1010,13 +1117,17 @@ export function Plead() {
           BigInt(con(s, "PleaHook.IMD_FEE_BPS") || 0n) -
           BigInt(con(s, "PleaHook.PLEA_BURN_BPS") || 0n))) /
       10000n;
-  const feePlea = price
-    ? ((oracle + LETTERBOX.TIP) * Q96 * 10000n) /
-      price /
-      (10000n -
-        BigInt(con(s, "PleaHook.IMD_FEE_BPS")) -
-        BigInt(con(s, "PleaHook.PLEA_BURN_BPS")))
-    : 0n;
+  const feePlea = feeInPlea(s, oracle + LETTERBOX.TIP);
+  const quoteValue = (value: string) =>
+    !val(s, "PleaHook.seeded")
+      ? "after trading opens"
+      : raw === 0n
+        ? "enter an amount"
+        : quote.loading
+          ? "Reading the pool…"
+          : quote.error
+            ? "can’t read the pool"
+            : value;
   return (
     <div className="stack stack--lg">
       <Title title="Plead to sell">
@@ -1073,12 +1184,27 @@ export function Plead() {
               <div className="field__top">
                 <h3 className="label">Your fact score</h3>
                 <span className="field__aside">
-                  From the chain: {fact.data}
+                  From the chain:{" "}
+                  {parts && parts.total === fact.data && !parts.uncovered
+                    ? `${parts.share} + ${parts.held} + ${parts.profit} + ${parts.trend} = ${fact.data}`
+                    : fact.data}
                 </span>
               </div>
               <FactCells parts={parts} total={fact.data} />
               <Meter fact={fact.data} need={need!} />
             </>
+          ) : address && raw > 0n && fact.loading ? (
+            <div className="stack" aria-busy="true">
+              <p className="loading-label">
+                <Icon name="hourglass" />
+                Reading your balance and buy record from the chain…
+              </p>
+              <div className="skeleton">
+                <div className="skeleton__line skeleton__line--short" />
+                <div className="skeleton__block" />
+                <div className="skeleton__line skeleton__line--mid" />
+              </div>
+            </div>
           ) : (
             <p className="loading-label">
               {address
@@ -1143,21 +1269,19 @@ export function Plead() {
                     ],
                     [
                       "You get, if approved and sold",
-                      quote.data
-                        ? `about ${tokenAmount(autoOut, s, true)}`
-                        : "after trading opens",
+                      quoteValue(`about ${tokenAmount(autoOut, s, true)}`),
                     ],
                     [
                       "At least",
-                      price
-                        ? tokenAmount(
-                            minimumAuto > LETTERBOX.AUTO_SELL_FEE
-                              ? minimumAuto - LETTERBOX.AUTO_SELL_FEE
-                              : 0n,
-                            s,
-                            true,
-                          )
-                        : "after trading opens",
+                      quoteValue(
+                        tokenAmount(
+                          minimumAuto > LETTERBOX.AUTO_SELL_FEE
+                            ? minimumAuto - LETTERBOX.AUTO_SELL_FEE
+                            : 0n,
+                          s,
+                          true,
+                        ),
+                      ),
                     ],
                   ]
                 : [
@@ -1168,15 +1292,11 @@ export function Plead() {
                     ["Extra fee", "none"],
                     [
                       "You get, if approved and sold",
-                      quote.data
-                        ? `about ${tokenAmount(expected, s, true)}`
-                        : "after trading opens",
+                      quoteValue(`about ${tokenAmount(expected, s, true)}`),
                     ],
                     [
                       "At least, with 1% slippage",
-                      quote.data
-                        ? tokenAmount((expected * 99n) / 100n, s, true)
-                        : "after trading opens",
+                      quoteValue(tokenAmount((expected * 99n) / 100n, s, true)),
                     ],
                   ]
             }
@@ -1195,9 +1315,7 @@ export function Plead() {
               title={`Plea #${balance.data.pending} is open: one plea at a time.`}
             >
               <p>
-                {balance.data.pendingPlea.status === 2
-                  ? `Sell by ${clock(Number(balance.data.pendingPlea.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")))}. Next plea ${span(Number(con(s, "CabalGate.COOLDOWN")))} after the sale, or ${clock(balance.data.cooldown)} if it lapses.`
-                  : `Plea #${balance.data.pending} is waiting for the Cabal, until ${clock(Number(balance.data.pendingPlea.submittedAt) + Number(con(s, "CabalGate.PENDING_EXPIRY")))}.`}{" "}
+                {openPleaNotice(balance.data.pendingPlea, s!, now)}{" "}
                 <a href={`#/p/${balance.data.pending}`}>
                   Open plea #{String(balance.data.pending)}
                 </a>
@@ -1210,7 +1328,13 @@ export function Plead() {
             >
               <p>
                 {span(Number(con(s, "CabalGate.COOLDOWN")), "adj")} cooldown
-                after your last sale, denial or lapse.
+                after your{" "}
+                {balance.data.cooldownCause === "sale"
+                  ? "sale"
+                  : balance.data.cooldownCause === "denied plea"
+                    ? "denied plea"
+                    : "plea lapsed"}
+                .
               </p>
             </Notice>
           ) : cannot ? (
@@ -1227,6 +1351,7 @@ export function Plead() {
           ) : null}
           {auto ? (
             <Action
+              connectText="Connect a wallet first: your balance, facts and need come from it."
               {...tx}
               label="Submit plea"
               sub={`${tokenAmount(oracle + LETTERBOX.TIP, s, true)} in PLEA`}
@@ -1248,6 +1373,7 @@ export function Plead() {
             />
           ) : (
             <ApprovedAction
+              connectText="Connect a wallet first: your balance, facts and need come from it."
               name="CabalGate"
               fn="submitSell"
               args={[raw, text]}

@@ -1,9 +1,14 @@
-import { LETTERBOX, Q96 } from "./models";
+import { APP } from "./config";
+import { LETTERBOX, Q96, feeDisplay } from "./models";
 import { useAccount } from "wagmi";
 import { useState } from "react";
 import { useApp, useRead } from "./context";
 import {
   con,
+  pct,
+  caseState,
+  noVerdict,
+  feeInPleaText,
   read,
   tokenAmount,
   utc,
@@ -28,11 +33,48 @@ import {
 } from "./components";
 import { parseAmount } from "./pages-trade";
 export function HomeDetails() {
-  const { s } = useApp(),
+  const { r, s } = useApp(),
     dead = !!val(s, "CabalGate.diedAt"),
     c = (key: string) => Number(con(s, `PleaHook.${key}`) || 0),
     pair = s?.constants.pairSymbol;
   const total = BigInt(con(s, "PLEA.TOTAL_SUPPLY") || 0n);
+  const display = feeDisplay(100n * 10n ** 18n, s?.constants || {}, 0n, dead);
+  const scanned =
+    s?.logs.filter(
+      (l) =>
+        l.contract === "PLEA" &&
+        l.eventName === "Transfer" &&
+        /^0x0{40}$/i.test(l.args.from),
+    ) || [];
+  const mintQuery = useRead(
+    async () => {
+      const logs = await r.client.getContractEvents({
+        address: r.addresses.PLEA,
+        abi: r.abis.PLEA,
+        eventName: "Transfer",
+        fromBlock: APP.eventStart,
+        toBlock: APP.eventStart,
+      });
+      return logs.filter((l: any) => /^0x0{40}$/i.test(l.args.from));
+    },
+    [],
+    !!s && !scanned.length,
+  );
+  const minted = (name: string) => {
+    const logs = scanned.length ? scanned : mintQuery.data || [];
+    const entry = logs.filter(
+      (l: any) => l.args.to.toLowerCase() === r.addresses[name]?.toLowerCase(),
+    );
+    return entry.length
+      ? entry.reduce((n: bigint, l: any) => n + BigInt(l.args.value), 0n)
+      : undefined;
+  };
+  const allocation = (name: string) => {
+    const n = minted(name);
+    return n === undefined
+      ? "Reading mint events…"
+      : `${tokenAmount(n, s)} (${total ? (n * 100n) / total : 0n}%)`;
+  };
   return (
     <section className="section">
       <div className="section__head">
@@ -45,12 +87,12 @@ export function HomeDetails() {
             rows={[
               [
                 `Cashback to you, in plain ${pair}`,
-                `${c("CASHBACK_BPS") / 100}%`,
+                `${pct(c("CASHBACK_BPS"))}`,
               ],
-              ["Owner", `${c("OWNER_BPS") / 100}%`],
+              ["Owner", `${pct(c("OWNER_BPS"))}`],
               ...(!dead
                 ? [
-                    ["Season prize pot", `${c("PRIZE_BPS") / 100}%`] as [
+                    ["Season prize pot", `${pct(c("PRIZE_BPS"))}`] as [
                       string,
                       string,
                     ],
@@ -58,30 +100,33 @@ export function HomeDetails() {
                 : []),
               [
                 `${pair} buy wall, kept in the pool`,
-                `${(c("POOL_BPS") + (dead ? c("PRIZE_BPS") : 0)) / 100}%`,
+                pct(c("POOL_BPS") + (dead ? c("PRIZE_BPS") : 0)),
               ],
-              ["Burned", `${c("PLEA_BURN_BPS") / 100}% of the PLEA`],
-              ["Total", `${(c("IMD_FEE_BPS") + c("PLEA_BURN_BPS")) / 100}%`],
+              ["Burned", `${pct(c("PLEA_BURN_BPS"))} of the PLEA`],
+              ["Total", pct(c("IMD_FEE_BPS") + c("PLEA_BURN_BPS")), "total"],
             ]}
           />
           <p className="small">
-            On a 100 {pair} buy,{" "}
-            {tokenAmount(
-              (100n * 10n ** 18n * 10000n) / BigInt(10000 + c("IMD_FEE_BPS")),
-              s,
-              true,
-            )}{" "}
-            reaches the pool. The fee is charged on what reaches it;{" "}
-            {c("PLEA_BURN_BPS") / 100}% of the PLEA is burned. Launch fees come
+            The {pair} parts are taken from the {pair} that reaches the pool. On
+            a 100 {pair} buy, {display.reaches} {pair} reaches the pool and the
+            fee is {display.fees} {pair}: {display.cash} back to you,{" "}
+            {display.owner} to the owner
+            {dead
+              ? ` and ${display.wall} to the buy wall`
+              : `, ${display.prize} to the season prize pot and ${display.wall} to the buy wall`}
+            ; {pct(c("PLEA_BURN_BPS"))} of the PLEA is burned. Launch fees come
             on top during the opening window.
           </p>
           {val(s, "PleaHook.pendingRebalance") && (
             <>
               <p className="small">
-                Anyone can rebalance the buy wall: it burns bought PLEA and
-                places collected imdTEST in the pool just below the price.
+                Anyone may press this, unpaid: it burns the PLEA the buy wall
+                has bought and places all the {pair} the hook has collected as
+                one buy wall just below the price. The {pair} never leaves the
+                pool.
               </p>
               <TxButton
+                connectText="Connect in the top bar to rebalance the buy wall."
                 name="PleaHook"
                 fn="rebalance"
                 label="Rebalance buy wall"
@@ -93,27 +138,28 @@ export function HomeDetails() {
         <Panel title="Supply">
           <Costs
             rows={[
+              ["Pool liquidity, locked forever", allocation("PleaHook")],
               [
-                "Pool liquidity, locked forever",
-                `${tokenAmount((total * 82n) / 100n, s)} (82%)`,
-              ],
-              [
-                `Season bonus: ${tokenAmount(con(s, "Seasons.BONUS_PER_SEASON"), s)} in each of the first ${con(s, "Seasons.BONUS_SEASONS")} seasons`,
-                `${tokenAmount((total * 6n) / 100n, s)} (6%)`,
+                `Season bonus: ${tokenAmount(con(s, "Seasons.BONUS_PER_SEASON"), s)} in each of the first ${["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"][Number(con(s, "Seasons.BONUS_SEASONS"))] || con(s, "Seasons.BONUS_SEASONS")} seasons`,
+                allocation("Seasons"),
               ],
               [
                 "Claim list: swarm 10% + airdrop 2%",
-                `${tokenAmount((total * 12n) / 100n, s)} (12%)`,
+                allocation("PleaDistributor"),
               ],
-              ["Total PLEA at launch", tokenAmount(total, s)],
+              ["Total PLEA at launch", tokenAmount(total, s), "total"],
               [
                 "Burned so far",
                 tokenAmount(
-                  total - BigInt(val(s, "PLEA.totalSupply") || 0n),
+                  -(total - BigInt(val(s, "PLEA.totalSupply") || 0n)),
                   s,
                 ),
               ],
-              ["Supply now", tokenAmount(val(s, "PLEA.totalSupply"), s)],
+              [
+                "Supply now",
+                tokenAmount(val(s, "PLEA.totalSupply"), s),
+                "total",
+              ],
             ]}
           />
           <a className="btn btn--sm" href="#/claim">
@@ -133,11 +179,7 @@ export function LetterDetails() {
     oracle = BigInt(con(s, "CabalGate.ORACLE_FEE") || 0n),
     fee = oracle + LETTERBOX.TIP,
     appeal = fee + BigInt(con(s, "CabalGate.APPEAL_POOL_SHARE") || 0n),
-    price = BigInt(val(s, "PleaHook.latestPrice") || 0n),
-    pleaFee = (v: bigint) =>
-      price
-        ? `about ${tokenAmount((v * Q96 * 10000n) / price / (10000n - BigInt(con(s, "PleaHook.IMD_FEE_BPS")) - BigInt(con(s, "PleaHook.PLEA_BURN_BPS"))), s, false, 0, "up")}`
-        : "after trading opens";
+    pleaFee = (v: bigint) => feeInPleaText(s, v);
   const status = useRead(
       () => read(r, "Letterbox", "status", [address]),
       [address],
@@ -268,17 +310,31 @@ export function PleaTimeline({
     objection =
       Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW")),
     cooldown = Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN"));
+  const state = pleaState(p, now, s!);
   const steps: any[] = [
     ["Submitted", clock(p.submittedAt), "arrow-right", "is-done"],
     [
-      p.verdictAt ? "Judged" : "Waiting for the Cabal",
-      p.verdictAt
-        ? `${clock(p.verdictAt)} · ${p.score} vs need ${p.need}`
-        : "Usually 3 to 6 minutes.",
+      state === "NO VERDICT"
+        ? "No verdict"
+        : p.verdictAt
+          ? "Judged"
+          : "Waiting for the Cabal",
+      state === "NO VERDICT"
+        ? noVerdict(p, s!).sentence
+        : p.verdictAt
+          ? `${clock(p.verdictAt)} · ${p.score} vs need ${p.need}`
+          : "Usually 3 to 6 minutes.",
       "gavel",
-      p.verdictAt ? "is-done" : "is-now",
+      p.verdictAt || state === "NO VERDICT" ? "is-done" : "is-now",
     ],
   ];
+  if (state === "NO VERDICT")
+    steps.push([
+      "No cooldown",
+      "The seller may plead again at once.",
+      "check",
+      "is-done",
+    ]);
   if (approved)
     steps.push([
       p.status === 4 ? "Sold" : "Sell window",
@@ -294,9 +350,9 @@ export function PleaTimeline({
     steps.push(
       [
         "Objections",
-        p.standing?.[0] && missedSeason === undefined
-          ? `Points held until ${clock(objection)} or the panel rules`
-          : `Closed at ${clock(objection)}`,
+        caseState(p, s!, now).closed
+          ? `Closed: ${caseState(p, s!, now).closed}`
+          : `Points held until ${clock(objection)} or the panel rules`,
         "megaphone-simple",
         p.standing?.[0] && missedSeason === undefined ? "is-now" : "is-done",
       ],

@@ -413,6 +413,47 @@ try {
     .getByText(/Sold .*PLEA for .*imdTEST\./)
     .first()
     .waitFor({ timeout: 30000 });
+  const mined = await client.getBlock({
+      includeTransactions: true,
+      cacheTime: 0,
+    }),
+    saleReceipt = await client.getTransactionReceipt({
+      hash: mined.transactions[0].hash,
+    });
+  const transferAbi = parseAbi([
+    "event Transfer(address indexed from,address indexed to,uint256 value)",
+  ]);
+  const poolManager = network.uniswapV4.poolManager;
+  let poolOut = 0n,
+    cashback = 0n;
+  for (const log of saleReceipt.logs) {
+    try {
+      const e = decodeEventLog({ abi: transferAbi, ...log });
+      if (
+        log.address.toLowerCase() === pair.toLowerCase() &&
+        e.args.to.toLowerCase() === testers[0].toLowerCase() &&
+        e.args.from.toLowerCase() === poolManager.toLowerCase()
+      )
+        poolOut += e.args.value;
+    } catch {}
+    try {
+      const e = decodeEventLog({ abi: abis.PleaHook, ...log });
+      if (e.eventName === "CashbackPaidPlain") cashback += e.args.amount;
+    } catch {}
+  }
+  const shown = (n) =>
+    `${(n / 10n ** 18n).toLocaleString("en-US")}.${((n / 10n ** 16n) % 100n).toString().padStart(2, "0")}`;
+  const fill = await p.locator('main [role="status"]').innerText();
+  assert.ok(poolOut > 0n && cashback > 0n);
+  assert.ok(fill.includes(`for ${shown(poolOut)} imdTEST.`));
+  assert.ok(
+    fill.includes(
+      `${cashback < 10n ** 16n ? "< 0.01" : shown(cashback)} imdTEST cashback`,
+    ),
+  );
+  steps.push(
+    "Round-2 T3: the sell fill matches PoolManager transfers and reports hook cashback separately",
+  );
   assert.equal(await p.getByText(/Season prize pot \(0.25%\)/).count(), 0);
   steps.push(
     "T6: after death, a free PLEA sale with no plea uses the swap card and no prize fee",

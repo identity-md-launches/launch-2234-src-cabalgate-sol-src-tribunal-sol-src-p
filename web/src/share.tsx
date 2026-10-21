@@ -3,6 +3,9 @@ import { useAccount } from "wagmi";
 import { useApp, useRead } from "./context";
 import {
   amount,
+  noVerdict,
+  span,
+  val,
   read,
   con,
   getPlea,
@@ -98,7 +101,7 @@ export function ShareCard({ p }: { p?: Plea }) {
       role="img"
       aria-label={
         p
-          ? `Plea ${p.id}, ${state}, ${p.score} vs need ${p.need}, ${p.points || 0} points. ${cardUrl}`
+          ? `Share card for plea #${p.id} by ${p.name || short(p.seller)}${p.seat ? ", seat holder" : ""}${p.flags & 1 ? ", by letter" : ""}${p.isAppeal ? `, the appeal of #${p.originalId}` : ""}: “${p.text}” ${state === "NO VERDICT" ? `No verdict: ${noVerdict(p, s!).sentence} No cooldown. No points.` : ["OBJECTION", "SUSTAINED", "OVERRULED"].includes(state) ? `Objection #${latestObjection.id} ${state.toLowerCase()}, ${latestObjection.ruling === 1 ? `a new panel re-scores it; ${p.need - Number(con(s, "Tribunal.MARGIN")) - 1} or less means no points` : `${latestObjection.newScore} vs need ${p.need}: ${state === "SUSTAINED" ? "no points" : `+${p.points} points`}`}.` : `${state}, ${p.score} vs need ${p.need}. ${earnsPoints && p.points ? `+${p.points} points${p.standing?.[0] ? " held" : ""}.` : "No points."}${state === "DENIED" && !p.appealed && !p.isAppeal && !dead && now <= Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")) ? ` Appeal open until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.` : ""}`} ${cardUrl}`
           : "PLEA: buying is open, selling needs a plea."
       }
     >
@@ -190,11 +193,16 @@ export function ShareCard({ p }: { p?: Plea }) {
                   <>
                     <div>
                       <b>
-                        {p.failure?.agreed || 0} of {p.failure?.answered || 0}
+                        {noVerdict(p, s!).sub === "no answer"
+                          ? "No answer"
+                          : noVerdict(p, s!).sub === "request refused"
+                            ? "Request refused"
+                            : `${p.failure.agreed} of ${p.failure.answered}`}
                       </b>
                       <span>
-                        judges agreed · {String(con(s, "CabalGate.QUORUM"))}{" "}
-                        needed
+                        {noVerdict(p, s!).sub.startsWith("panel split")
+                          ? `judges agreed · ${con(s, "CabalGate.QUORUM")} needed`
+                          : `within ${span(Number(con(s, "CabalGate.PENDING_EXPIRY")))}`}
                       </span>
                     </div>
                     <div>
@@ -340,8 +348,14 @@ export function Share({
     ? state === "PENDING"
       ? `PENDING: the Cabal is judging ${subject}; need ${p.need}.`
       : state === "NO VERDICT"
-        ? `NO VERDICT on ${subject}; ${p.failure?.answered ? `${p.failure.agreed} of ${p.failure.answered} agreed (${con(s, "CabalGate.QUORUM")} needed)` : "no answer"}. No cooldown.`
-        : `${state}: ${subject}, ${latestObjection && [2, 3].includes(latestObjection.ruling) ? latestObjection.newScore : p.score} vs need ${p.need}.${p.status === 4 ? ` Sold for ${tokenAmount(soldFor(p, s!), s, true)}.` : state === "UPHELD" ? " No further appeal." : state === "SUSTAINED" ? " No points; the sale stands." : state === "DENIED" && !p.appealed ? ` Appeal until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.` : ""}`
+        ? `NO VERDICT on ${subject}; ${noVerdict(p, s!).sub}. No cooldown.`
+        : state === "OBJECTION"
+          ? `OBJECTION #${latestObjection.id} to ${subject} (${pleaState(p, now, s!)}, ${p.score} vs need ${p.need}): a new panel re-scores it, and ${p.need - Number(con(s, "Tribunal.MARGIN")) - 1} or less means no points.`
+          : state === "SUSTAINED"
+            ? `Objection #${latestObjection.id} SUSTAINED: ${subject} re-scored ${latestObjection.newScore} vs need ${p.need}, no points; the sale stands.`
+            : state === "OVERRULED"
+              ? `Objection #${latestObjection.id} OVERRULED: ${subject} re-scored ${latestObjection.newScore} vs need ${p.need}, counts ${p.points} points.`
+              : `${state}: ${subject}, ${latestObjection && [2, 3].includes(latestObjection.ruling) ? latestObjection.newScore : p.score} vs need ${p.need}.${p.status === 4 ? ` Sold for ${tokenAmount(soldFor(p, s!), s, true)}.` : state === "UPHELD" ? " No further appeal." : state === "SUSTAINED" ? " No points; the sale stands." : state === "DENIED" && !p.appealed ? ` Appeal until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.` : ""}`
     : "Buying is open. Selling needs a plea.";
   let quote =
     p?.text
@@ -437,6 +451,11 @@ export function Share({
         <Empty
           title={`No plea #${id} yet`}
           action={{ href: "#/wall", label: "See the Wall" }}
+          actions={
+            val(s, "CabalGate.cabalAlive") && val(s, "PleaHook.seeded")
+              ? [{ href: "#/plead", label: "Plead to sell" }]
+              : []
+          }
         >
           Check the plea number.{" "}
           {s?.v["PleaHook.seeded"]

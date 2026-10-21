@@ -15,6 +15,8 @@ import { APP, claimsAbi, registryAbi } from "./config";
 import { useApp, useRead, useTx } from "./context";
 import {
   amount,
+  feeInPleaText,
+  signedPercent,
   clock,
   span,
   deadman,
@@ -68,7 +70,7 @@ export function Home() {
   const count = Number(val(s, "CabalGate.nextId") || 1n) - 1,
     trend = !previous
       ? "no 24h price yet, counts as flat"
-      : `24h ${((Number(hourly) * 100) / Number(previous) - 100).toFixed(1)}%${dead ? "" : `, counts as ${hourly > (previous * 102n) / 100n ? "up" : hourly * 100n >= previous * 98n ? "flat" : "down"}`}`;
+      : `24h ${signedPercent((Number(hourly) * 100) / Number(previous) - 100)}${dead ? "" : `, counts as ${hourly > (previous * 102n) / 100n ? "up" : hourly * 100n >= previous * 98n ? "flat" : "down"}`}`;
   return (
     <>
       <div className={latest ? "split hero" : "hero"}>
@@ -140,7 +142,7 @@ export function Home() {
               "Season prize pot",
               tokenAmount(potOf(s), s, true),
               season
-                ? `${season.displayed < BigInt(con(s, "Seasons.BONUS_SEASONS")) ? `+ ${tokenAmount(con(s, "Seasons.BONUS_PER_SEASON"), s)}; ` : ""}${dead ? (season.current.closed ? `Season ${season.displayed + 1n} was the last.` : `close season ${season.displayed + 1n} from ${clock(Number(season.current.bounds[2]) + Number(con(s, "Seasons.CLOSE_GRACE")))}`) : `season ${season.displayed + 1n} ends in ${duration(Number(season.current.bounds[2]) - now)}`}${season.awaiting !== undefined && season.awaiting < season.displayed ? `; plus what season ${season.awaiting + 1n} rolls over at its close` : ""}`
+                ? `${season.displayed < BigInt(con(s, "Seasons.BONUS_SEASONS")) ? `+ ${tokenAmount(con(s, "Seasons.BONUS_PER_SEASON"), s)}; ` : ""}${dead ? (season.current.closed ? `Season ${season.displayed + 1n} was the last.` : `close season ${season.displayed + 1n} from ${clock(Number(season.current.bounds[2]) + Number(con(s, "Seasons.CLOSE_GRACE")))}`) : `season ${season.displayed + 1n} ends in ${duration(Number(season.current.bounds[2]) - now)}`}${season.awaiting !== undefined && season.awaiting < season.displayed ? `; plus what season ${season.displayed} rolls over at its close` : ""}`
                 : "The first season begins when trading opens",
             ],
             [
@@ -166,16 +168,19 @@ export function Home() {
             <div className="stat" key={i}>
               <span className="stat__label">{label}</span>
               <span className="stat__value">
-                <span className="nowrap">
-                  {typeof value === "string" && value.endsWith(" imdTEST") ? (
-                    <>
-                      {value.slice(0, -8)}{" "}
-                      <span className="small">imdTEST</span>
-                    </>
-                  ) : (
-                    value
-                  )}
-                </span>
+                {typeof value === "string" &&
+                value.endsWith(` ${s?.constants.pairSymbol}`) ? (
+                  <>
+                    <span className="nowrap">
+                      {value.slice(0, -(s!.constants.pairSymbol.length + 1))}
+                    </span>{" "}
+                    <span className="nowrap small">
+                      {s!.constants.pairSymbol}
+                    </span>
+                  </>
+                ) : (
+                  <span className="nowrap">{value}</span>
+                )}
               </span>
               <span className="stat__note">{note}</span>
             </div>
@@ -283,9 +288,10 @@ export function Letters() {
               true,
             )}
             ,{" "}
-            {val(s, "PleaHook.latestPrice")
-              ? `about ${tokenAmount(((BigInt(con(s, "CabalGate.ORACLE_FEE")) + LETTERBOX.TIP) * Q96) / BigInt(val(s, "PleaHook.latestPrice")), s)}`
-              : "after trading opens"}
+            {feeInPleaText(
+              s,
+              BigInt(con(s, "CabalGate.ORACLE_FEE") || 0n) + LETTERBOX.TIP,
+            )}
             . ETH pays only gas.
           </p>
         </Panel>
@@ -324,6 +330,11 @@ export function Letters() {
               Send 0 ETH to the Letterbox. Put the UTF-8 hex data from the
               checker below in the transaction’s data field. The sender is
               always the writer.
+            </p>
+            <p>
+              For example, NAME mira_eth is{" "}
+              <code className="addr__text">{stringToHex("NAME mira_eth")}</code>
+              .
             </p>
             <Costs
               rows={[
@@ -421,6 +432,7 @@ export function Letters() {
               </button>
             </div>
             <Action
+              connectText="Connect in the top bar to send a letter."
               {...tx}
               label="Send letter"
               onRun={() => tx.send("Letterbox", "letter", [text])}
@@ -471,10 +483,14 @@ function VaultClaim({
   vault,
   claims,
   open,
+  loading,
+  loadError,
 }: {
   vault: Address;
   claims: any[] | undefined;
   open: boolean;
+  loading: boolean;
+  loadError: string;
 }) {
   const { r, s } = useApp();
   const entry = claims?.find(
@@ -488,8 +504,22 @@ function VaultClaim({
   const tx = useTx();
   return (
     <div className="stack stack--sm">
-      {entry ? (
+      <Costs
+        rows={[
+          ["Vault", <AddressView address={vault} label="vault" shortDisplay />],
+          ["Claimable", entry ? tokenAmount(BigInt(entry.amount), s) : "—"],
+        ]}
+      />
+      {entry && status.data ? (
+        <>
+          <Notice title={`Already claimed for the vault ${short(vault)}.`}>
+            <p>The allocation was paid to the vault.</p>
+          </Notice>
+          <ClaimReceipt index={entry.index} />
+        </>
+      ) : entry ? (
         <Action
+          connectText="Connect in the top bar to send a claim. Any wallet will do: it only pays the gas."
           {...tx}
           label={`Claim ${tokenAmount(BigInt(entry.amount), s)} to the vault`}
           sub="gas only"
@@ -511,11 +541,21 @@ function VaultClaim({
         />
       ) : (
         <p className="small">
-          {open && claims
-            ? "This vault is not on the published list."
-            : "The claim list is not open yet."}
+          {!open
+            ? "The claim list is not open yet."
+            : loading
+              ? "Reading the claim list…"
+              : loadError
+                ? "Can’t check this vault: the claim list did not load. Try again above."
+                : claims
+                  ? "This vault is not on the published list."
+                  : "Reading the claim list…"}
         </p>
       )}
+      <p className="small">
+        Sent from this hot wallet; the PLEA lands on the vault, which never
+        connects.
+      </p>
     </div>
   );
 }
@@ -527,6 +567,7 @@ export function Claim() {
   const [claims, setClaims] = useState<any[]>();
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [reload, setReload] = useState(0);
   const root = val(s, "PleaDistributor.merkleRoot");
   const isOpen = root && root !== "0x" + "0".repeat(64);
   useEffect(() => {
@@ -566,7 +607,7 @@ export function Claim() {
     return () => {
       active = false;
     };
-  }, [isOpen]);
+  }, [isOpen, reload]);
   const entry = claims?.find(
     (c) => c.account.toLowerCase() === target?.toLowerCase(),
   );
@@ -663,7 +704,19 @@ export function Claim() {
                 {loadError && (
                   <div className="error-box" role="alert">
                     <p className="error-box__title">Can’t check the list</p>
-                    <p>{loadError}</p>
+                    <p className="small">{loadError}</p>
+                    <div className="btn-row">
+                      <button
+                        className="btn btn--sm"
+                        onClick={() => {
+                          setLoadError("");
+                          setReload((n) => n + 1);
+                        }}
+                      >
+                        <Icon name="arrow-clockwise" />
+                        Try again
+                      </button>
+                    </div>
                   </div>
                 )}
                 {loadError && (
@@ -711,6 +764,7 @@ export function Claim() {
                         {status.data && <ClaimReceipt index={entry.index} />}
                       </Notice>
                       <Action
+                        connectText="Connect in the top bar to send a claim. Any wallet will do: it only pays the gas."
                         {...tx}
                         label={`Claim ${tokenAmount(BigInt(entry.amount), s)}`}
                         sub="gas only"
@@ -744,7 +798,7 @@ export function Claim() {
               </>
             )}
           </Panel>
-          <Panel level={2} title="Delegated vaults">
+          <Panel level={2} title="Delegated vaults" flush meta="delegate.xyz">
             <p className="small">
               Read from delegate.xyz v2. Claim from this wallet; the PLEA lands
               on the vault, which never connects.
@@ -752,10 +806,16 @@ export function Claim() {
             {!address ? (
               <p>Connect in the top bar to list your delegated vaults.</p>
             ) : delegated.loading ? (
-              <p className="loading-label">
-                <Icon name="hourglass" />
-                Reading delegated vaults…
-              </p>
+              <div className="stack" aria-busy="true">
+                <p className="loading-label">
+                  <Icon name="hourglass" />
+                  Reading the delegate.xyz registry for {short(address)}…
+                </p>
+                <div
+                  className="skeleton__line skeleton__line--mid"
+                  aria-hidden="true"
+                />
+              </div>
             ) : delegated.error ? (
               <Notice kind="warn" title="Cannot read delegations">
                 <p>
@@ -767,12 +827,13 @@ export function Claim() {
               <div className="stack">
                 {Array.from(new Set(delegated.data.map((d) => d.from))).map(
                   (vault) => (
-                    <div className="panel stack stack--sm" key={vault}>
-                      <AddressView address={vault} label="vault" />
+                    <div className="stack stack--sm" key={vault}>
                       <VaultClaim
                         vault={vault}
                         claims={claims}
                         open={!!isOpen}
+                        loading={loading}
+                        loadError={loadError}
                       />
                     </div>
                   ),
@@ -790,14 +851,19 @@ export function Claim() {
                 No vault has delegated to this wallet on Sepolia.
               </Empty>
             )}
+            <p className="label">Read from the delegate.xyz registry</p>
             <AddressView
               address={APP.delegateRegistry}
               label="delegate.xyz registry"
             />
           </Panel>
         </div>
-        <Panel level={2} title="About the list" className="panel--flush">
-          <p className="meta">{isOpen ? "Final" : "Not set"}</p>
+        <Panel
+          level={2}
+          title="About the list"
+          flush
+          meta={isOpen ? "Final" : "Not set"}
+        >
           <RootDate />
           <p>
             The root can be set once. Once set, no allocation can be added,

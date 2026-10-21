@@ -5,7 +5,9 @@ import {
   parseAbi,
   type Abi,
 } from "viem";
-export const messages: Record<string, string> = {
+export type ErrorMessage = { title: string; body?: string };
+export type ErrorValue = string | ErrorMessage;
+export const messages: Record<string, ErrorValue> = {
   AlreadyBegun: "Trading has already begun. Refresh the market.",
   AlreadyConsumed: "This verdict was already used. Refresh the plea.",
   AlreadySet: "This setting is already configured.",
@@ -76,6 +78,8 @@ export const messages: Record<string, string> = {
     "The price moved past your limit. Nothing was bought; refresh the quote or raise slippage.",
   PriceLimitOutOfBounds:
     "This price limit is outside the pool range. Lower the amount.",
+  HookCallFailed:
+    "The pool hook refused this swap. Nothing was traded; refresh and try again.",
   PoolNotInitialized: "Trading is not open yet. Wait for the seed.",
   SwapAmountCannotBeZero: "Enter an amount greater than zero.",
   ERC20InsufficientAllowance:
@@ -194,6 +198,7 @@ const poolErrors = parseAbi([
   "error WrappedError(address target,bytes4 selector,bytes reason,bytes details)",
   "error PriceLimitAlreadyExceeded(uint160 sqrtPriceCurrentX96,uint160 sqrtPriceLimitX96)",
   "error PriceLimitOutOfBounds(uint160 sqrtPriceLimitX96)",
+  "error HookCallFailed()",
   "error PoolNotInitialized()",
   "error SwapAmountCannotBeZero()",
 ]);
@@ -235,24 +240,40 @@ export function explainReadError(e: any) {
     return e.message;
   return "The public RPC did not answer. The site tries the next one by itself; your funds are not affected.";
 }
-export type ErrorMap = Record<string, string | ((args: any) => string)>;
+export type ErrorMap = Record<string, ErrorValue | ((args: any) => ErrorValue)>;
+export class DisplayError extends Error {
+  display: ErrorMessage;
+  constructor(display: ErrorMessage) {
+    super(display.title);
+    this.display = display;
+  }
+}
 export function explainError(
   e: any,
   abis: Abi[] = [],
   overrides: ErrorMap = {},
-): string {
+): ErrorMessage {
+  const wrap = (value: ErrorValue): ErrorMessage =>
+    typeof value === "string" ? { title: value } : value;
+  if (e instanceof DisplayError) return e.display;
   if (e?.code === 4001 || /user rejected|user denied/i.test(e?.message || ""))
-    return "You declined the wallet request. Nothing was sent; try again when ready.";
+    return wrap(
+      "You declined the wallet request. Nothing was sent; try again when ready.",
+    );
   const decoded = decodeCustomError(e, abis);
   const override = decoded && overrides[decoded.name];
   if (decoded)
-    return (
+    return wrap(
       (typeof override === "function" ? override(decoded.args) : override) ||
-      messages[decoded.name] ||
-      `The contract refused this action (${decoded.name}). Refresh its state before retrying.`
+        messages[decoded.name] ||
+        `The contract refused this action (${decoded.name}). Refresh its state before retrying.`,
     );
   if (/insufficient funds/i.test(e?.message || ""))
-    return "You need Sepolia ETH for gas and enough tokens for this action. Add test funds and try again.";
-  if (e?.constructor === Error) return e.message;
-  return "The transaction could not be simulated. Refresh the chain data and try again. Nothing was sent.";
+    return wrap(
+      "You need Sepolia ETH for gas and enough tokens for this action. Add test funds and try again.",
+    );
+  if (e?.constructor === Error) return wrap(e.message);
+  return wrap(
+    "The transaction could not be simulated. Refresh the chain data and try again. Nothing was sent.",
+  );
 }

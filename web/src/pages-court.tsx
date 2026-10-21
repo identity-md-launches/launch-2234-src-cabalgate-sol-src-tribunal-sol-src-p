@@ -1,14 +1,22 @@
+import { useSaleQuote } from "./sale";
 import { Share } from "./share";
 import { LETTERBOX, Q96 } from "./models";
 import { appealPreview } from "./appeal";
 import { PleaTimeline } from "./details";
 import { oracleRequest } from "./oracle";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAccount } from "wagmi";
 import { formatUnits, type Address } from "viem";
 import { useApp, useRead, useTx } from "./context";
 import {
   amount,
+  caseState,
+  caseClosedText,
+  noVerdict,
+  blockTime,
+  feeInPlea,
+  feeInPleaText,
+  words,
   clock,
   span,
   seasonState,
@@ -58,11 +66,54 @@ export function Wall() {
     [older, setOlder] = useState<Plea[]>([]),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const previousLogs = useRef(0);
+  useEffect(() => {
+    if (!s) return;
+    const diff = s.logs.slice(previousLogs.current);
+    previousLogs.current = s.logs.length;
+    const ids = new Set(
+      diff.flatMap((l) => {
+        const oid = ["Ruled", "ObjectionVoid"].includes(l.eventName)
+          ? s.v.objections?.find((o: any) => o.id === l.args.id)?.pleaId
+          : undefined;
+        return [
+          l.args.pleaId,
+          oid,
+          ...([
+            "Verdict",
+            "PleaFailed",
+            "PleaExpired",
+            "PleaLapsed",
+            "SellExecuted",
+            "Delivered",
+          ].includes(l.eventName)
+            ? [l.args.id]
+            : []),
+        ]
+          .filter(Boolean)
+          .map(String);
+      }),
+    );
+    const affected = older.filter((p) => ids.has(String(p.id)));
+    if (affected.length)
+      void Promise.all(affected.map((p) => getPlea(r, p.id, s.logs)))
+        .then((fresh) =>
+          setOlder((old) =>
+            old.map((p) => fresh.find((x) => x.id === p.id) || p),
+          ),
+        )
+        .catch(() => setError("Older pleas could not refresh. Try again."));
+  }, [s]);
   const wallet = new URLSearchParams(location.hash.split("?")[1]).get("wallet"),
     all = [...(s?.pleas || []), ...older].filter(
       (p, i, a) => a.findIndex((x) => x.id === p.id) === i,
     ),
     oldest = all.reduce((v, p) => (p.id < v ? p.id : v), all[0]?.id || 1n);
+  const walletName = useRead(
+    () => read(r, "Letterbox", "nameOf", [wallet]),
+    [wallet],
+    !!wallet && /^0x[\da-f]{40}$/i.test(wallet),
+  );
   const group = (p: Plea) =>
     [2, 4, 5].includes(p.status)
       ? "Approved"
@@ -164,50 +215,58 @@ export function Wall() {
             More filters{flags.length ? ` · ${flags.length} on` : ""}{" "}
             <Icon name="caret-down" />
           </summary>
-          <div className="stack">
-            <p className="label">Show only</p>
-            <div className="chips" role="group" aria-label="Show only">
-              {["Sold", "Appeals", "By letter", "Objected"].map((f) => (
-                <button
-                  key={f}
-                  className="chip"
-                  aria-pressed={flags.includes(f)}
-                  onClick={() =>
-                    setFlags((a) =>
-                      a.includes(f) ? a.filter((x) => x !== f) : [...a, f],
-                    )
-                  }
-                >
-                  {f}
-                </button>
-              ))}
+          <div className="panel wall-tools__panel">
+            <div>
+              <p className="label">Show only</p>
+              <div className="chips" role="group" aria-label="Show only">
+                {["Sold", "Appeals", "By letter", "Objected"].map((f) => (
+                  <button
+                    key={f}
+                    className="chip"
+                    aria-pressed={flags.includes(f)}
+                    onClick={() =>
+                      setFlags((a) =>
+                        a.includes(f) ? a.filter((x) => x !== f) : [...a, f],
+                      )
+                    }
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
             </div>
-            <p className="label">Sort</p>
-            <div className="chips" role="group" aria-label="Sort pleas">
-              {["Newest", "Highest score"].map((f) => (
-                <button
-                  className="chip"
-                  key={f}
-                  aria-pressed={sort === f}
-                  onClick={() => setSort(f)}
-                >
-                  {f}
-                </button>
-              ))}
+            <div>
+              <p className="label">Sort</p>
+              <div className="chips" role="group" aria-label="Sort pleas">
+                {["Newest", "Highest score"].map((f) => (
+                  <button
+                    className="chip"
+                    key={f}
+                    aria-pressed={sort === f}
+                    onClick={() => setSort(f)}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </details>
+        <p className="meta" aria-live="polite">
+          {shown.length
+            ? `Showing #${shown[0].id} to #${shown.at(-1)!.id}: ${shown.length} of ${counts[family]} ${family === "All" ? "pleas" : family.toLowerCase() + " plea" + (counts[family] === 1 ? "" : "s")}, ${sort.toLowerCase()} first`
+            : "No matching pleas"}
+          {wallet
+            ? ` · Showing pleas by ${walletName.data || short(wallet)}`
+            : ""}
+          {flags.length
+            ? ` · ${flags.map((f) => (f === "By letter" ? "pleas sent by letter" : f === "Appeals" ? "appeals" : f.toLowerCase() + " pleas")).join(", ")}`
+            : ""}
+          {approved + denied && !s?.historyError
+            ? ` · ${((approved * 100) / (approved + denied)).toFixed(1)}% of judged pleas approved`
+            : ""}
+        </p>
       </div>
-      <p className="meta form-actions-top" aria-live="polite">
-        {shown.length
-          ? `Showing #${shown[0].id} to #${shown.at(-1)!.id}: ${shown.length} of ${total}, ${sort.toLowerCase()} first`
-          : "No matching pleas"}
-        {wallet ? ` · Showing pleas by ${short(wallet)}` : ""}
-        {flags.length ? ` · ${flags.join(", ")}` : ""}
-        {approved + denied && !s?.historyError
-          ? ` · ${((approved * 100) / (approved + denied)).toFixed(1)}% of judged pleas approved`
-          : ""}
-      </p>
       {shown.length ? (
         <div className="wall-grid">
           {shown.map((p) => (
@@ -232,7 +291,7 @@ export function Wall() {
                   : "No pleas yet"
           }
           action={
-            total ? { href: "#/wall", label: "Show all pleas" } : undefined
+            total ? { onClick: reset, label: "Show all pleas" } : undefined
           }
         >
           {flags.includes("Objected")
@@ -243,11 +302,6 @@ export function Wall() {
                 ? "The first plea comes after trading opens."
                 : "Every verdict lands here, newest first."}
         </Empty>
-      )}
-      {!shown.length && total > 0 && (
-        <button className="btn btn--sm" onClick={reset}>
-          Show all pleas
-        </button>
       )}
       {error && (
         <p className="bad-text" role="alert">
@@ -268,17 +322,17 @@ export function Wall() {
           </button>
           <p className="small">
             {busy
-              ? "The cards above stay put."
+              ? `The ${shown.length} cards above stay put.`
               : `Next: #${oldest - 1n} to #${oldest > 12n ? oldest - 12n : 1n}`}
           </p>
         </div>
       ) : (
         total > 0 && (
           <div className="wall-more">
-            <p>That is every plea, back to #1.</p>
-            <p>Yours would be #{total + 1}.</p>
+            <p className="strong">That is every plea, back to #1.</p>
+            <p className="meta">Yours would be #{total + 1}.</p>
             {val(s, "PleaHook.seeded") && !val(s, "CabalGate.diedAt") && (
-              <a className="btn" href="#/plead">
+              <a className="btn btn--sm" href="#/plead">
                 Write a plea <Icon name="arrow-right" />
               </a>
             )}
@@ -311,6 +365,7 @@ export function Appeal({ p }: { p: Plea }) {
   const fee =
     (con(s, "CabalGate.ORACLE_FEE") || 0n) +
     (con(s, "CabalGate.APPEAL_POOL_SHARE") || 0n);
+  const end = Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN"));
   const closed =
     now > Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")) ||
     p.appealed ||
@@ -320,7 +375,8 @@ export function Appeal({ p }: { p: Plea }) {
     <Panel card title="One appeal">
       <Countdown
         until={Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN"))}
-        label="Appeal window"
+        label={`Appeal until ${clock(end)}`}
+        ariaLabel={`Appeal until ${clock(end)}, ${words(end - now)} left`}
       />
       {auto ? (
         <>
@@ -384,7 +440,7 @@ export function Appeal({ p }: { p: Plea }) {
                 [
                   `Paid in PLEA, ${tokenAmount(s?.v.appealFees?.[0], s, true)}`,
                   s?.v.appealFees
-                    ? `about ${tokenAmount(priceFee(s!, s!.v.appealFees[0]), s, false, 0, "up")}`
+                    ? `about ${tokenAmount(feeInPlea(s!, s!.v.appealFees[0]), s, false, 0, "up")}`
                     : "after trading opens",
                 ],
                 [
@@ -417,8 +473,10 @@ export function Appeal({ p }: { p: Plea }) {
       </p>
       {auto ? (
         <Action
+          connectText="Connect in the top bar to appeal."
           {...tx}
           label="Appeal"
+          lockedReason={closed ? "This appeal window is closed." : undefined}
           sub={
             auto
               ? `${tokenAmount(s?.v.appealFees?.[0], s, true)} in PLEA`
@@ -435,6 +493,13 @@ export function Appeal({ p }: { p: Plea }) {
             need > Number(con(s, "CabalGate.MAX_PLEA_SCORE"))
           }
           reason={
+            (!text
+              ? `Appeal stays off until your text passes the checks; nothing is paid before that. Send it before ${clock(end)}.`
+              : !textCheck("plea", text).ok
+                ? "Fix the text above to appeal. Nothing is paid until it passes."
+                : need === undefined
+                  ? "Reading your fact score and need…"
+                  : "") ||
             openReason ||
             preview.error ||
             preview.data?.reason ||
@@ -447,10 +512,12 @@ export function Appeal({ p }: { p: Plea }) {
         />
       ) : (
         <ApprovedAction
+          connectText="Connect in the top bar to appeal."
           name="CabalGate"
           fn="appeal"
           args={[p.id, raw, text]}
           label="Appeal"
+          lockedReason={closed ? "This appeal window is closed." : undefined}
           sub={
             auto
               ? `${tokenAmount(s?.v.appealFees?.[0], s, true)} in PLEA`
@@ -472,6 +539,13 @@ export function Appeal({ p }: { p: Plea }) {
             need > Number(con(s, "CabalGate.MAX_PLEA_SCORE"))
           }
           reason={
+            (!text
+              ? `Appeal stays off until your text passes the checks; nothing is paid before that. Send it before ${clock(end)}.`
+              : !textCheck("plea", text).ok
+                ? "Fix the text above to appeal. Nothing is paid until it passes."
+                : need === undefined
+                  ? "Reading your fact score and need…"
+                  : "") ||
             openReason ||
             (closed
               ? "This appeal window is closed."
@@ -492,13 +566,16 @@ export function Appeal({ p }: { p: Plea }) {
         )}{" "}
         paid in PLEA, about{" "}
         {tokenAmount(
-          priceFee(
+          feeInPlea(
             s!,
             BigInt(con(s, "CabalGate.ORACLE_FEE")) +
               BigInt(con(s, "CabalGate.APPEAL_POOL_SHARE")) +
               LETTERBOX.TIP,
           ),
           s,
+          false,
+          0,
+          "up",
         )}{" "}
         (oracle fee + buy-wall share + tip, back if you send SELL yourself).{" "}
         <a href="#/letters">How letters work</a>
@@ -553,31 +630,7 @@ export function PleaPage({ id }: { id: string }) {
       knownClosed === undefined,
   );
   const seasonClosed = knownClosed ?? recordSeasonQuery.data;
-  const saleQuote = useRead(
-    async () => {
-      if (!p) return 0n;
-      const allowance = address
-        ? await read(r, "PLEA", "allowance", [address, r.addresses.CabalGate])
-        : 0n;
-      if (
-        address?.toLowerCase() === p.seller.toLowerCase() &&
-        allowance >= p.amount &&
-        !(p.flags & 2)
-      ) {
-        const result = await r.client.simulateContract({
-          address: r.addresses.CabalGate,
-          abi: r.abis.CabalGate,
-          functionName: "executeSell",
-          args: [0n],
-          account: address,
-        });
-        return result.result as bigint;
-      }
-      return (await poolQuote(r, s!, p.amount, true)).out;
-    },
-    [id, address, p?.status],
-    !!s && !!p && p.status === 2,
-  );
+  const saleQuote = useSaleQuote(p);
 
   const mine = p?.seller.toLowerCase() === address?.toLowerCase();
   const tx = useTx(id);
@@ -611,6 +664,11 @@ export function PleaPage({ id }: { id: string }) {
             icon="scales"
             title={`No plea #${id} yet`}
             action={{ href: "#/wall", label: "See the Wall" }}
+            actions={
+              val(s, "CabalGate.cabalAlive") && val(s, "PleaHook.seeded")
+                ? [{ href: "#/plead", label: "Plead to sell" }]
+                : []
+            }
           >
             {query.error ||
               (val(s, "PleaHook.seeded")
@@ -691,7 +749,14 @@ export function PleaPage({ id }: { id: string }) {
               rows={[
                 ["Amount", tokenAmount(p.amount, s)],
                 ["Submitted", utc(p.submittedAt)],
-                ["Verdict", p.verdictAt > 0n ? utc(p.verdictAt) : "Waiting"],
+                [
+                  "Verdict",
+                  pleaState(p, now, s) === "NO VERDICT"
+                    ? `No verdict: ${noVerdict(p, s).sub}`
+                    : p.verdictAt > 0n
+                      ? utc(p.verdictAt)
+                      : "Waiting",
+                ],
                 ["Oracle request", short(p.intakeId)],
               ]}
             />
@@ -705,12 +770,12 @@ export function PleaPage({ id }: { id: string }) {
             {oracle.data && (
               <div className="stack stack--sm">
                 <p className="plea__judge">
-                  Judged by {oracle.data.panelSize || "Panel"} judges ·{" "}
-                  {oracle.data.attestation?.agreed ??
-                    oracle.data.agreement?.agreed ??
-                    "Agreement pending"}{" "}
-                  agreed ·{" "}
-                  {elapsed(Number(p.verdictAt) - Number(p.submittedAt))}
+                  Judged by{" "}
+                  {oracle.data.panelSize ?? con(s, "CabalGate.PANEL_SIZE")}
+                  {oracle.data.agreed === undefined
+                    ? ""
+                    : ` · ${oracle.data.agreed} agreed`}{" "}
+                  · {elapsed(Number(p.verdictAt) - Number(p.submittedAt))}
                   {oracle.data.comment
                     ? ` · A judge said: “${oracle.data.comment}”`
                     : ""}
@@ -761,6 +826,7 @@ export function PleaPage({ id }: { id: string }) {
               </>
             ) : canSell ? (
               <>
+                {p.isAppeal && <AppealHistory p={p} />}
                 <Countdown
                   until={sellUntil}
                   label="Sell within"
@@ -769,7 +835,11 @@ export function PleaPage({ id }: { id: string }) {
                 />
                 <p className="small">
                   The window closes at {clock(sellUntil, true)}. Miss it and the
-                  plea lapses (the points still count).
+                  plea lapses
+                  {!p.standing?.[1] && !p.excluded
+                    ? " (the points still count)"
+                    : ""}
+                  .
                 </p>
                 {auto ? (
                   <>
@@ -778,6 +848,7 @@ export function PleaPage({ id }: { id: string }) {
                       sale goes to the writer. The runner earns the tip.
                     </p>
                     <Action
+                      connectText="Connect in the top bar to deliver the sale."
                       {...tx}
                       label={mine ? "Sell yourself" : "Deliver approved sale"}
                       variant={mine ? "ink" : undefined}
@@ -814,6 +885,7 @@ export function PleaPage({ id }: { id: string }) {
                       ]}
                     />
                     <ApprovedAction
+                      connectText="Connect in the top bar to sell."
                       name="CabalGate"
                       fn="executeSell"
                       args={[minOut]}
@@ -837,7 +909,7 @@ export function PleaPage({ id }: { id: string }) {
                       }}
                       errors={{
                         SlippageExceeded: `The price moved more than 1%. Nothing was sold; your PLEA stays in your wallet. The window is open until ${clock(sellUntil, true)}: try again.`,
-                        WindowLapsed: `The window closed at ${clock(sellUntil, true)}. Plea #${p.id} lapsed: nothing was sold. Your +${p.points} points still count. Next plea at ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.`,
+                        WindowLapsed: `The window closed at ${clock(sellUntil, true)}. Plea #${p.id} lapsed: nothing was sold. ${p.standing?.[1] || p.excluded ? "" : `Your +${p.points} points still count. `}Next plea at ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}.`,
                       }}
                     />
                   </>
@@ -855,6 +927,7 @@ export function PleaPage({ id }: { id: string }) {
             )}
             {p.status === 1 && state === "NO VERDICT" && !auto && (
               <TxButton
+                connectText="Connect in the top bar to expire it."
                 label="Expire unanswered plea"
                 name="CabalGate"
                 fn="expire"
@@ -866,6 +939,7 @@ export function PleaPage({ id }: { id: string }) {
               !canSell &&
               (p.status !== 1 || state === "NO VERDICT") && (
                 <TxButton
+                  connectText="Connect in the top bar to settle the stake."
                   label="Return escrow and tip"
                   name="Letterbox"
                   fn="settle"
@@ -874,7 +948,7 @@ export function PleaPage({ id }: { id: string }) {
               )}
           </Panel>
           {approved && (
-            <Panel level={2} title="Your points">
+            <Panel level={2} title={mine ? "Your points" : "Points"}>
               <p className="stat__value">
                 {p.standing?.[1] || p.excluded
                   ? "No points"
@@ -901,8 +975,22 @@ export function PleaPage({ id }: { id: string }) {
                 />
               )}
               <Action
+                connectText="Connect in the top bar to record points."
                 {...pointTx}
-                label="Record my points"
+                lockedReason={
+                  p.excluded
+                    ? "This seller is excluded from season points and prizes."
+                    : p.recorded
+                      ? `+${p.points} points recorded.`
+                      : p.standing?.[1]
+                        ? "An objection was sustained. This plea earns no points."
+                        : missedSeason
+                          ? "Recording is closed for this season."
+                          : held
+                            ? `Record ${mine ? "your" : "the"} +${p.points} points after ${clock(objectionUntil)}, when objections close.`
+                            : undefined
+                }
+                label={mine ? "Record my points" : "Record the points"}
                 primary={false}
                 onRun={() => pointTx.send("Seasons", "record", [p!.id])}
                 disabled={
@@ -917,7 +1005,7 @@ export function PleaPage({ id }: { id: string }) {
                   p.excluded
                     ? "This seller is excluded from season points and prizes."
                     : p.recorded
-                      ? "Already recorded"
+                      ? `+${p.points} points recorded.`
                       : p.standing?.[1]
                         ? "An objection was sustained. This plea earns no points."
                         : missedSeason
@@ -940,7 +1028,15 @@ export function PleaPage({ id }: { id: string }) {
             mine && <Appeal p={p} />}
           {approved && (
             <Panel level={2} title="Objections">
-              {now <= objectionUntil ? (
+              {caseState(p, s, now).closed ? (
+                <p>
+                  <span className="pill">
+                    {caseClosedText(caseState(p, s, now).closed!)}
+                  </span>{" "}
+                  · {caseState(p, s, now).filed} of {caseState(p, s, now).max}{" "}
+                  filed
+                </p>
+              ) : (
                 <>
                   <div>
                     <Countdown
@@ -949,23 +1045,35 @@ export function PleaPage({ id }: { id: string }) {
                     />
                   </div>
                   <span className="pill">
-                    {p.objections?.length || 0} of{" "}
-                    {String(con(s, "Tribunal.MAX_OBJECTIONS"))} filed
+                    {caseState(p, s, now).filed} of {caseState(p, s, now).max}{" "}
+                    filed
                   </span>
-                  <p>
-                    You can’t object to your own plea. Others may until{" "}
-                    {clock(objectionUntil)}, for a{" "}
-                    {tokenAmount(con(s, "Tribunal.ORACLE_FEE"), s, true)} fee +{" "}
-                    {tokenAmount(con(s, "Tribunal.STAKE"), s, true)} stake. A
-                    new panel of {String(con(s, "Tribunal.PANEL_SIZE"))}{" "}
-                    re-scores it: sustained only at{" "}
-                    {p.need - Number(con(s, "Tribunal.MARGIN")) - 1} or less.
-                    Void if the panel splits or gives no answer within{" "}
-                    {span(Number(con(s, "Tribunal.PENDING_EXPIRY")))}: nothing
-                    changes. The sale is never touched.
-                  </p>
-                  {!mine &&
-                    (address ? (
+                  {caseState(p, s, now).full ? (
+                    <Notice kind="warn" title="This case is full.">
+                      <p>
+                        {caseState(p, s, now).pending.length ===
+                        caseState(p, s, now).max
+                          ? `Two objections are pending on plea #${p.id}. Nothing to send.`
+                          : `Objection #${caseState(p, s, now).pending[0]?.id} is pending and the other slot has a ruling. Nothing to send.`}
+                      </p>
+                    </Notice>
+                  ) : mine ? (
+                    <p>
+                      <b>You can’t object to your own plea.</b> Others may until{" "}
+                      {clock(objectionUntil)}, for a{" "}
+                      {tokenAmount(con(s, "Tribunal.ORACLE_FEE"), s, true)} fee
+                      + {tokenAmount(con(s, "Tribunal.STAKE"), s, true)} stake.
+                      A new panel of {String(con(s, "Tribunal.PANEL_SIZE"))}{" "}
+                      re-scores it: sustained only at{" "}
+                      {p.need - Number(con(s, "Tribunal.MARGIN")) - 1} or less
+                      (more than {String(con(s, "Tribunal.MARGIN"))} below your
+                      need of {p.need}), and then no points. Void if that panel
+                      splits or gives no answer within{" "}
+                      {span(Number(con(s, "Tribunal.PENDING_EXPIRY")))}: nothing
+                      changes. The sale is never touched.
+                    </p>
+                  ) : address ? (
+                    <>
                       <a
                         className="btn btn--primary"
                         href={`#/objections?plea=${p.id}`}
@@ -980,21 +1088,42 @@ export function PleaPage({ id }: { id: string }) {
                           )}
                         </span>
                       </a>
-                    ) : (
+                      <p className="small">
+                        {tokenAmount(con(s, "Tribunal.ORACLE_FEE"), s, true)}{" "}
+                        oracle fee +{" "}
+                        {tokenAmount(con(s, "Tribunal.STAKE"), s, true)} stake.
+                        A new panel of {String(con(s, "Tribunal.PANEL_SIZE"))}{" "}
+                        re-scores it; the sale is never touched.
+                      </p>
+                    </>
+                  ) : (
+                    <>
                       <Notice title="Connect in the top bar to object.">
                         <p>
                           The plea, its verdict and its timeline read without a
                           wallet. Only the seller can sell it.
                         </p>
                       </Notice>
-                    ))}
+                      <button
+                        className="btn btn--primary btn--block"
+                        aria-disabled="true"
+                        aria-describedby="object-connect"
+                      >
+                        Object{" "}
+                        {tokenAmount(
+                          BigInt(con(s, "Tribunal.ORACLE_FEE")) +
+                            BigInt(con(s, "Tribunal.STAKE")),
+                          s,
+                          true,
+                        )}
+                      </button>
+                      <p className="small" id="object-connect">
+                        Connect a wallet first. Objections close at{" "}
+                        {clock(objectionUntil)}.
+                      </p>
+                    </>
+                  )}
                 </>
-              ) : (
-                <p>
-                  Objections closed at {clock(objectionUntil)} ·{" "}
-                  {p.objections?.length || 0} of{" "}
-                  {String(con(s, "Tribunal.MAX_OBJECTIONS"))} filed.
-                </p>
               )}
               <ObjectionLines p={p} />
               <a className="btn" href={`#/objections?plea=${p.id}`}>
@@ -1068,7 +1197,9 @@ export function PleaPage({ id }: { id: string }) {
                   {String(con(s, "CabalGate.PANEL_SIZE"))} seats, quorum{" "}
                   {String(con(s, "CabalGate.QUORUM"))}
                   {oracle.data
-                    ? ` · ${oracle.data.attestation?.agreed || oracle.data.agreement?.agreed || "agreement pending"} agreed`
+                    ? oracle.data.agreed === undefined
+                      ? ""
+                      : `: ${oracle.data.agreed} of ${oracle.data.panelSize ?? con(s, "CabalGate.PANEL_SIZE")} agreed, in ${elapsed(Number(p.verdictAt) - Number(p.submittedAt))}`
                     : ""}
                 </dd>
               </div>
@@ -1126,16 +1257,18 @@ export function ObjectionForm({ p }: { p: Plea }) {
     ),
     c = info.data?.c,
     pending = c?.pending.filter((n: bigint) => n !== 0n).length || 0,
-    count = Number(c?.count || 0) + pending,
-    full = count >= Number(con(s, "Tribunal.MAX_OBJECTIONS")),
+    cs = caseState(p, s!, now),
+    count = cs.filed,
+    full = cs.full,
     own = address?.toLowerCase() === p.seller.toLowerCase(),
     until = Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW")),
     closed =
-      ![2, 4, 5].includes(p.status) ||
-      now > until ||
-      !val(s, "CabalGate.cabalAlive") ||
-      p.recorded ||
-      c?.sustained;
+      cs.closed ||
+      (![2, 4, 5].includes(p.status)
+        ? "this plea is not approved"
+        : !val(s, "CabalGate.cabalAlive")
+          ? "the Cabal is dead"
+          : undefined);
   const cost =
       BigInt(con(s, "Tribunal.ORACLE_FEE")) + BigInt(con(s, "Tribunal.STAKE")),
     same = p.objections?.some(
@@ -1143,7 +1276,7 @@ export function ObjectionForm({ p }: { p: Plea }) {
         o.objector.toLowerCase() === address?.toLowerCase() && o.ruling !== 4,
     ),
     reason = closed
-      ? `Objections closed at ${clock(until)}.`
+      ? caseClosedText(closed!)
       : own
         ? "You can’t object to your own plea."
         : full
@@ -1153,7 +1286,9 @@ export function ObjectionForm({ p }: { p: Plea }) {
             : info.data?.excluded || info.data?.sellerExcluded
               ? "This wallet or seller is excluded from seasons."
               : !textCheck("objection", text).ok
-                ? "Write your objection to send it; nothing is paid until it passes."
+                ? text
+                  ? "The Tribunal refuses it: BadObjectionText. Fix the text above to object; nothing is paid until it passes."
+                  : "Write your objection to send it; nothing is paid until it passes."
                 : undefined;
   return (
     <article className="card plea stack">
@@ -1175,17 +1310,17 @@ export function ObjectionForm({ p }: { p: Plea }) {
           ? `Sold ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`
           : `Sells ${tokenAmount(p.amount, s)}`}
       </p>
-      {now <= until ? (
+      {!closed ? (
         <div>
           <Countdown until={until} label="Objections close in" />
         </div>
       ) : (
-        <p>Objections closed at {clock(until)}.</p>
+        <p>{caseClosedText(closed!)}</p>
       )}
       <div>
         <span className="pill">
           {count} of {String(con(s, "Tribunal.MAX_OBJECTIONS"))} filed
-          {count === 1 ? " · one slot left" : ""}
+          {!closed && count === cs.max - 1 ? " · one slot left" : ""}
         </span>
       </div>
       {p.objections
@@ -1201,21 +1336,23 @@ export function ObjectionForm({ p }: { p: Plea }) {
           </div>
         ))}
       <p>
-        {p.standing?.[1]
+        {p.standing?.[1] || p.excluded
           ? "No points"
           : `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}`}
       </p>
-      {own ? (
+      {closed ? (
+        <Notice title={caseClosedText(closed)}>
+          <p>
+            {p.excluded
+              ? "This seller is excluded from season points."
+              : p.standing?.[1]
+                ? "No points for this plea."
+                : "The points may be recorded once no panel is pending."}
+          </p>
+        </Notice>
+      ) : own ? (
         <Notice title="You can’t object to your own plea.">
           <p>Anyone else may ask a second panel. The sale stands.</p>
-        </Notice>
-      ) : closed ? (
-        <Notice title={`Objections closed at ${clock(until)}.`}>
-          <p>
-            {p.standing?.[1]
-              ? "No points for this plea."
-              : "The points may be recorded once no panel is pending."}
-          </p>
         </Notice>
       ) : full ? (
         <>
@@ -1229,7 +1366,9 @@ export function ObjectionForm({ p }: { p: Plea }) {
             Object
           </button>
           <p className="small">
-            Two objections are pending on plea #{String(p.id)}. Nothing to send.
+            {cs.pending.length === cs.max
+              ? `Two objections are pending on plea #${p.id}. Nothing to send.`
+              : `Objection #${cs.pending[0]?.id} is pending and the other slot has a ruling. Nothing to send.`}
           </p>
         </>
       ) : (
@@ -1254,6 +1393,7 @@ export function ObjectionForm({ p }: { p: Plea }) {
             </Notice>
           )}
           <ApprovedAction
+            connectText="Connect in the top bar to object."
             name="Tribunal"
             fn="object"
             args={[p.id, text]}
@@ -1291,10 +1431,7 @@ export function Objections() {
   const open =
       s?.court.open
         .filter(
-          (p) =>
-            [2, 4, 5].includes(p.status) &&
-            now <=
-              Number(p.verdictAt) + Number(con(s, "Tribunal.OBJECTION_WINDOW")),
+          (p) => [2, 4, 5].includes(p.status) && !caseState(p, s!, now).closed,
         )
         .sort((a, b) => Number(a.verdictAt - b.verdictAt)) || [],
     selected =
@@ -1342,7 +1479,8 @@ export function Objections() {
         <div className="section__head">
           <h2>Open now</h2>
           <p className="meta">
-            {list.length} approved pleas · closing soonest first
+            {list.length} approved plea{list.length === 1 ? "" : "s"} · closing
+            soonest first
           </p>
         </div>
         <div className="split">
@@ -1507,6 +1645,7 @@ export function Objections() {
                             Number(o.filedAt) +
                               Number(con(s, "Tribunal.PENDING_EXPIRY")) && (
                             <TxButton
+                              connectText="Connect in the top bar to expire it."
                               name="Tribunal"
                               fn="expire"
                               args={[o.id]}
@@ -1515,6 +1654,7 @@ export function Objections() {
                           )}
                         {o.ruling > 1 && !o.settled && (
                           <TxButton
+                            connectText="Connect in the top bar to settle the stake."
                             name="Tribunal"
                             fn="settle"
                             args={[o.id]}
@@ -1547,7 +1687,9 @@ function ObjectionLines({ p }: { p: Plea }) {
           <span className="stamp stamp--sm stamp--objection">
             {["", "OBJECTION", "SUSTAINED", "OVERRULED", "VOID"][o.ruling]}
           </span>{" "}
-          {objectionLine(o, p)}
+          {o.ruling === 1
+            ? `OBJECTION #${o.id} pending by ${short(o.objector)}`
+            : objectionLine(o, p)}
           {o.text ? ` · “${o.text}”` : ""}
         </p>
       ))}
@@ -1565,71 +1707,161 @@ function SaleSummary({
   appealId?: bigint;
   missedSeason: boolean;
 }) {
-  const { s, now } = useApp(),
+  const { r, s, now } = useApp(),
     delivered = s!.logs.find(
       (l) => l.eventName === "Delivered" && l.args.id === p.id,
     ),
     { address } = useAccount(),
     end = Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN"));
+  const saleLog =
+    delivered ||
+    s!.logs.find((l) => l.eventName === "SellExecuted" && l.args.id === p.id);
+  const time = useRead(
+    () => blockTime(r, saleLog!.blockNumber),
+    [saleLog?.blockNumber],
+    !!saleLog,
+  );
+  const original = useRead(
+    () => getPlea(r, p.originalId, s!.logs),
+    [p.originalId],
+    !!p.isAppeal,
+  );
+  const o =
+    p.objections?.find((o) => o.ruling === 2) ||
+    p.objections?.find((o) => o.ruling === 1);
+  const oName = useRead(
+    () => read(r, "Letterbox", "nameOf", [o.objector]),
+    [o?.id],
+    !!o,
+  );
+  const panel = useRead(
+    () => oracleRequest(r, p, s!.logs, o),
+    [o?.id, o?.ruling],
+    !!o && o.ruling !== 1,
+  );
+  const sold =
+    p.status === 4
+      ? `${tokenAmount(p.amount, s)} sold for ${tokenAmount(soldFor(p, s!), s, true)}${time.data ? ` at ${clock(time.data)}` : ""}.`
+      : "Nothing was sold.";
+  const appealLine =
+    p.isAppeal && original.data
+      ? `#${p.originalId} was denied, ${original.data.score} vs need ${original.data.need}, at ${clock(original.data.verdictAt)}. The appeal scored ${p.score} at ${clock(p.verdictAt)}${state === "UPHELD" ? ": denied again." : "."}`
+      : undefined;
+  if (
+    o &&
+    ["SOLD", "LAPSED", "OVERTURNED"].includes(state) &&
+    [4, 5, 2].includes(p.status)
+  )
+    return (
+      <>
+        <p>
+          Objection #{String(o.id)} by {oName.data || short(o.objector)}:
+          {o.ruling === 2
+            ? ` a second panel re-scored it ${o.newScore}${panel.data?.agreed === undefined ? "" : ` (${panel.data.agreed} of ${panel.data.panelSize ?? con(s, "Tribunal.PANEL_SIZE")} agreed)`}. The first panel gave ${p.score}.`
+            : ""}
+        </p>
+        {o.ruling === 1 && <p className="plea__text">“{o.text}”</p>}
+        <p>
+          {o.ruling === 2
+            ? `No points for this plea. ${p.status === 4 ? "The sale stands: " : ""}`
+            : `+${p.points} points held until the second panel rules. Sustained if the new score is ${p.need - Number(con(s, "Tribunal.MARGIN")) - 1} or less (more than ${con(s, "Tribunal.MARGIN")} below the need ${p.need}). ${p.status === 4 ? "The sale stands either way: " : ""}`}
+          {sold}
+        </p>
+        {o.ruling === 2 && (
+          <p>
+            The objector’s {tokenAmount(con(s, "Tribunal.STAKE"), s, true)}{" "}
+            stake{" "}
+            {o.settled
+              ? "was returned."
+              : "goes back when anyone calls settle."}
+          </p>
+        )}
+        {appealLine && <p>{appealLine}</p>}
+      </>
+    );
   if (p.status === 4)
     return (
       <>
+        {appealLine && <p>{appealLine}</p>}
         <Costs
           rows={
-            delivered
+            p.isAppeal
               ? [
                   ["Sold", tokenAmount(p.amount, s)],
                   [
-                    "Sold by",
-                    delivered.args.runner.toLowerCase() ===
-                    address?.toLowerCase()
-                      ? "you"
-                      : short(delivered.args.runner),
+                    "For",
+                    `${tokenAmount(soldFor(p, s!), s, true)}${time.data ? ` at ${clock(time.data)}` : ""}`,
                   ],
                   [
-                    "Tip, to whoever sold it",
-                    tokenAmount(delivered.args.tip, s, true),
+                    "Points",
+                    p.standing?.[1] || p.excluded
+                      ? "none"
+                      : missedSeason
+                        ? "not recorded; season closed"
+                        : `+${p.points}${p.standing?.[0] ? " held" : ""}${p.seat ? ` (${Math.min(p.score, Number(p.standing?.[2] ?? p.score))} × ${Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS")) / 10000}, seat)` : ""}`,
                   ],
-                  ...(delivered.args.fee > 0n
-                    ? [
+                  ...(delivered
+                    ? ([
+                        ["Sold by", short(delivered.args.runner)],
+                        [
+                          "Tip, to whoever sold it",
+                          tokenAmount(delivered.args.tip, s, true),
+                        ],
                         [
                           "Auto-sell fee, to the season prize pot",
                           tokenAmount(delivered.args.fee, s, true),
-                        ] as [string, string],
-                      ]
+                        ],
+                      ] as [string, string][])
                     : []),
-                  ["To the writer", tokenAmount(soldFor(p, s!), s, true)],
-                  [
-                    "Points",
-                    p.standing?.[1] || p.excluded
-                      ? "none"
-                      : missedSeason
-                        ? "not recorded; season closed"
-                        : `+${p.points}${p.standing?.[0] ? " held" : ""}`,
-                  ],
                 ]
-              : [
-                  [
-                    "Sold",
-                    `${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`,
-                  ],
-                  [
-                    "Points",
-                    p.standing?.[1] || p.excluded
-                      ? "none"
-                      : missedSeason
-                        ? "not recorded; season closed"
-                        : `+${p.points}`,
-                  ],
-                ]
+              : delivered
+                ? [
+                    ["Sold", tokenAmount(p.amount, s)],
+                    [
+                      "Sold by",
+                      delivered.args.runner.toLowerCase() ===
+                      address?.toLowerCase()
+                        ? "you"
+                        : short(delivered.args.runner),
+                    ],
+                    [
+                      "Tip, to whoever sold it",
+                      tokenAmount(delivered.args.tip, s, true),
+                    ],
+                    ...(delivered.args.fee > 0n
+                      ? [
+                          [
+                            "Auto-sell fee, to the season prize pot",
+                            tokenAmount(delivered.args.fee, s, true),
+                          ] as [string, string],
+                        ]
+                      : []),
+                    ["To the writer", tokenAmount(soldFor(p, s!), s, true)],
+                    [
+                      "Points",
+                      p.standing?.[1] || p.excluded
+                        ? "none"
+                        : missedSeason
+                          ? "not recorded; season closed"
+                          : `+${p.points}${p.standing?.[0] ? " held" : ""}`,
+                    ],
+                  ]
+                : [
+                    [
+                      "Sold",
+                      `${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}${time.data ? ` at ${clock(time.data)}` : ""}`,
+                    ],
+                    [
+                      "Points",
+                      p.standing?.[1] || p.excluded
+                        ? "none"
+                        : missedSeason
+                          ? "not recorded; season closed"
+                          : `+${p.points}`,
+                    ],
+                  ]
           }
         />
-        {p.isAppeal && (
-          <p>
-            #{String(p.originalId)} was denied. This appeal overturned that
-            verdict: {p.score} vs need {p.need} at {clock(p.verdictAt)}.
-          </p>
-        )}
       </>
     );
   if (state === "LAPSED")
@@ -1643,7 +1875,11 @@ function SaleSummary({
             Number(p.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")),
           )}
           .{" "}
-          {missedSeason ? (
+          {p.standing?.[1] ? (
+            "An objection was sustained: no points for this plea."
+          ) : p.excluded ? (
+            "This seller is excluded from season points."
+          ) : missedSeason ? (
             "Its points were not recorded before the season closed."
           ) : (
             <>
@@ -1670,15 +1906,12 @@ function SaleSummary({
   if (state === "NO VERDICT")
     return (
       <>
+        <p>{noVerdict(p, s!).sentence}</p>
         <p>
-          {p.failure?.status === 1
-            ? "The request was refused."
-            : p.failure?.answered
-              ? `The panel split: ${p.failure.agreed} of ${p.failure.answered} agreed (${con(s, "CabalGate.QUORUM")} needed).`
-              : `No answer within ${span(Number(con(s, "CabalGate.PENDING_EXPIRY")))}.`}
-        </p>
-        <p>
-          Cleared at once by the Intake. No cooldown; the{" "}
+          {noVerdict(p, s!).reported
+            ? "Cleared at once by the Intake."
+            : `The request expired at ${clock(noVerdict(p, s!).time)} with no answer.`}{" "}
+          No cooldown; the{" "}
           {tokenAmount(con(s, "CabalGate.ORACLE_FEE"), s, true)} oracle fee is
           not refunded. The seller may plead again at once.
         </p>
@@ -1687,7 +1920,7 @@ function SaleSummary({
   if (state === "UPHELD")
     return (
       <p>
-        No further appeal. The{" "}
+        {appealLine} No further appeal. The{" "}
         {span(Number(con(s, "CabalGate.COOLDOWN")), "adj")} cooldown ran from
         this verdict, until {clock(end)}.
       </p>
@@ -1699,14 +1932,26 @@ function SaleSummary({
       </p>
     );
   if (now > end) return <p>The appeal window closed at {clock(end)}.</p>;
-  return <p>The seller may appeal once, until {clock(end)}.</p>;
-}
-function priceFee(s: any, value: bigint) {
-  const rate =
-    10000n -
-    BigInt(con(s, "PleaHook.IMD_FEE_BPS")) -
-    BigInt(con(s, "PleaHook.PLEA_BURN_BPS"));
   return (
-    (value * Q96 * 10000n) / BigInt(val(s, "PleaHook.latestPrice") || 1n) / rate
+    <p>
+      {address?.toLowerCase() === p.seller.toLowerCase() ? "You" : "The seller"}{" "}
+      may appeal once, until {clock(end)}.
+    </p>
   );
+}
+
+function AppealHistory({ p }: { p: Plea }) {
+  const { r, s } = useApp(),
+    original = useRead(
+      () => getPlea(r, p.originalId, s!.logs),
+      [p.originalId],
+      !!p.isAppeal,
+    );
+  return original.data ? (
+    <p>
+      #{String(p.originalId)} was denied, {original.data.score} vs need{" "}
+      {original.data.need}, at {clock(original.data.verdictAt)}. The appeal
+      scored {p.score} at {clock(p.verdictAt)}.
+    </p>
+  ) : null;
 }

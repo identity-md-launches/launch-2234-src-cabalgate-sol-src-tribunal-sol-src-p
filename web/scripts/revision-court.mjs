@@ -341,7 +341,9 @@ async function audit(pages, routes, label) {
           }));
           matrix.push({
             label,
-            wallet: !!wallet,
+            wallet:
+              (await page.getByRole("link", { name: /your profile/ }).count()) >
+              0,
             route,
             theme,
             width,
@@ -463,11 +465,11 @@ try {
   assert.equal((await read("CabalGate", "getPlea", [7n])).need, 40);
   const page = await reader("#/objections");
   await page
-    .getByText(/approved pleas · closing soonest first/)
+    .getByText(/approved pleas? · closing soonest first/)
     .waitFor({ timeout: 60000 });
   const openText = await page.locator("main").innerText();
   results.openSeven =
-    openText.includes("Plea #7") && openText.includes("1 approved pleas");
+    openText.includes("Plea #7") && openText.includes("1 approved plea");
   assert.equal(results.openSeven, fixed);
   await page.goto(base + "#/objections?plea=7");
   await page
@@ -556,7 +558,7 @@ try {
     .waitFor({ timeout: 60000 });
   assert.equal(
     await openSeller
-      .getByRole("button", { name: "Record my points", exact: true })
+      .getByRole("button", { name: /^Record (my|the) points/, exact: true })
       .getAttribute("aria-disabled"),
     "false",
   );
@@ -589,10 +591,10 @@ try {
   const sellerPage = await wallet(testers[0]);
   await sellerPage.goto(base + "#/p/1");
   await sellerPage
-    .getByRole("button", { name: "Record my points", exact: true })
+    .getByRole("button", { name: /^Record (my|the) points/, exact: true })
     .waitFor({ timeout: 60000 });
   const record = sellerPage.getByRole("button", {
-    name: "Record my points",
+    name: /^Record (my|the) points/,
     exact: true,
   });
   if (fixed)
@@ -643,7 +645,7 @@ try {
       );
       assert.equal(
         await sellerPage
-          .getByRole("button", { name: "Record my points", exact: true })
+          .getByRole("button", { name: /^Record (my|the) points/, exact: true })
           .getAttribute("aria-disabled"),
         "true",
       );

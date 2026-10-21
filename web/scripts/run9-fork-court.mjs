@@ -488,7 +488,7 @@ try {
     .waitFor({ timeout: 60000 });
   assert.equal(
     await p2
-      .getByRole("button", { name: "Record my points", exact: true })
+      .getByRole("button", { name: "Record the points", exact: true })
       .getAttribute("aria-disabled"),
     "true",
   );

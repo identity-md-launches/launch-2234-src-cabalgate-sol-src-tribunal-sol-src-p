@@ -1,3 +1,4 @@
+import { useSaleQuote } from "./sale";
 import {
   useId,
   useState,
@@ -11,6 +12,12 @@ import { encodeFunctionData, getAddress, type Address } from "viem";
 import { useApp, useRead, useTx } from "./context";
 import {
   amount,
+  deadman,
+  heldTime,
+  pct,
+  signedPercent,
+  noVerdict,
+  caseState,
   clock,
   words,
   span,
@@ -42,42 +49,69 @@ export const Icon = ({ name }: { name: string }) => (
 export const Title = ({
   title,
   children,
+  aside,
 }: {
   title: string;
+  aside?: ReactNode;
   children?: ReactNode;
 }) => (
   <div>
     <div className="page-title">
       <h1>{title}</h1>
+      {aside}
     </div>
     {children && <p className="lead">{children}</p>}
   </div>
 );
-export const Panel = ({
+export function Panel({
   title,
   children,
   card = false,
   className = "",
   level = 3,
+  flush = false,
+  meta,
+  id,
 }: {
-  title?: string;
+  title?: ReactNode;
   children: ReactNode;
   card?: boolean;
   className?: string;
   level?: 2 | 3 | 4;
-}) => (
-  <section className={`${card ? "card" : "panel"} stack ${className}`}>
-    {title &&
-      (level === 2 ? (
-        <h2 className="card__title">{title}</h2>
-      ) : level === 4 ? (
-        <h4 className="card__title">{title}</h4>
+  flush?: boolean;
+  meta?: ReactNode;
+  id?: string;
+}) {
+  const H = `h${level}` as "h2" | "h3" | "h4";
+  const heading = title && (
+    <H id={id ? `${id}-title` : undefined} className="card__title">
+      {title}
+    </H>
+  );
+  return (
+    <section
+      id={id}
+      aria-labelledby={id ? `${id}-title` : undefined}
+      className={`${card ? "card" : "panel"} ${flush ? "panel--flush" : "stack"} ${className}`}
+    >
+      {flush ? (
+        <>
+          <div className="panel__head">
+            {heading}
+            {meta && <span className="meta">{meta}</span>}
+          </div>
+          <div className="panel__body stack">{children}</div>
+        </>
       ) : (
-        <h3 className="card__title">{title}</h3>
-      ))}
-    {children}
-  </section>
-);
+        <>
+          {heading}
+          {meta && <span className="meta">{meta}</span>}
+          {children}
+        </>
+      )}
+    </section>
+  );
+}
 export const Notice = ({
   title,
   children,
@@ -99,16 +133,19 @@ export const Notice = ({
     </div>
   </div>
 );
+type EmptyAction = { href?: string; label: string; onClick?: () => void };
 export const Empty = ({
   title,
   children,
   icon = "scales",
   action,
+  actions = [],
 }: {
   title: string;
   children: ReactNode;
   icon?: string;
-  action?: { href: string; label: string };
+  action?: EmptyAction;
+  actions?: EmptyAction[];
 }) => (
   <div className="empty">
     <svg className="icon empty__icon" aria-hidden="true">
@@ -116,23 +153,34 @@ export const Empty = ({
     </svg>
     <p className="empty__title">{title}</p>
     <p>{children}</p>
-    {action && (
-      <a className="btn btn--sm" href={action.href}>
-        {action.label}
-      </a>
-    )}
+    <div className="btn-row">
+      {[...(action ? [action] : []), ...actions].map((a, i) =>
+        a.href ? (
+          <a key={i} className="btn btn--sm" href={a.href}>
+            {a.label}
+          </a>
+        ) : (
+          <button
+            key={i}
+            type="button"
+            className="btn btn--sm"
+            onClick={a.onClick}
+          >
+            {a.label}
+          </button>
+        ),
+      )}
+    </div>
   </div>
 );
 export const Costs = ({
   rows,
-  parts = [],
 }: {
-  rows: [ReactNode, ReactNode][];
-  parts?: number[];
+  rows: [ReactNode, ReactNode, ("part" | "total")?][];
 }) => (
   <dl className="costs">
-    {rows.map(([a, b], i) => (
-      <div key={i} className={parts.includes(i) ? "is-part" : undefined}>
+    {rows.map(([a, b, kind], i) => (
+      <div key={i} className={kind === "part" ? "is-part" : kind}>
         <dt>{a}</dt>
         <dd>{b}</dd>
       </div>
@@ -142,9 +190,11 @@ export const Costs = ({
 export function AddressView({
   address,
   label = "contract",
+  shortDisplay = false,
 }: {
   address: string;
   label?: string;
+  shortDisplay?: boolean;
 }) {
   address = getAddress(address);
   const { r, toast } = useApp();
@@ -157,7 +207,7 @@ export function AddressView({
         target="_blank"
         rel="noreferrer"
       >
-        {address}
+        {shortDisplay ? short(address) : address}
       </a>
       <button
         className="copy-btn"
@@ -188,25 +238,33 @@ export function Countdown({
   urgent = false,
   block = false,
   wait = false,
+  ariaLabel,
+  format,
 }: {
   until: number;
   label: string;
   urgent?: boolean;
   block?: boolean;
   wait?: boolean;
+  ariaLabel?: string;
+  format?: "deadman";
 }) {
   const { now } = useApp();
   return (
     <span
       className={`countdown ${urgent ? "countdown--urgent" : ""} ${block ? "countdown--block" : ""} ${wait ? "countdown--wait" : ""}`}
       role="timer"
-      aria-label={`${label} ${words(until - now)}, by ${clock(until)}`}
+      aria-label={
+        ariaLabel || `${label} ${words(until - now)}, by ${clock(until)}`
+      }
     >
       <span className="cluster cluster--sm">
         <Icon name={wait ? "hourglass" : "timer"} />
         {label}
       </span>
-      <span className="countdown__time">{duration(until - now)}</span>
+      <span className="countdown__time">
+        {format === "deadman" ? deadman(until - now) : duration(until - now)}
+      </span>
       {block && (
         <span className="countdown__bar" aria-hidden="true">
           <span
@@ -239,7 +297,7 @@ export function TradingGate({ onSeed }: { onSeed?: () => void } = {}) {
       <Notice title="Trading is not open yet" kind="warn">
         <p>
           {now < start
-            ? `Trading may open from ${utc(start)}.`
+            ? `Trading may open from ${clock(start)}.`
             : `The opening time has passed. Trading opens when the pool is seeded.`}
         </p>
       </Notice>
@@ -263,6 +321,7 @@ export function TradingGate({ onSeed }: { onSeed?: () => void } = {}) {
               pays cashback normally.
             </p>
             <Action
+              connectText="Connect in the top bar to seed trading."
               {...tx}
               label="Seed trading"
               primary={false}
@@ -342,7 +401,7 @@ export function TextBox({
               ? value
                 ? "Text passes the checks."
                 : ""
-              : `${issues.length} problems: ${issues[0]?.message || ""}`,
+              : `${issues.length} ${issues.length === 1 ? "problem" : "problems"}: ${issues[0]?.message || ""}`,
       );
     last.current = key;
   }, [key, touched]);
@@ -366,7 +425,11 @@ export function TextBox({
                       ok: true,
                     },
                   ]
-                : issues.map((i: any) => ({ text: i.message, ok: false }))
+                : issues.map((i: any) => ({
+                    text: i.message,
+                    ok: false,
+                    extra: true,
+                  }))
       : kind === "letter" &&
           ["name", "clear-name", "sell"].includes(result.kind)
         ? [{ text: result.reads || "SELL needs no text.", ok: result.ok }]
@@ -403,6 +466,7 @@ export function TextBox({
                 text: i.message,
                 ok: false,
                 warning: i.warning,
+                extra: true,
               })),
           ];
   return (
@@ -473,7 +537,9 @@ export function TextBox({
                     ? "warning"
                     : row.ok
                       ? "check"
-                      : "x"
+                      : row.extra
+                        ? "warning-circle"
+                        : "x"
               }
             />
             <span>{row.text}</span>
@@ -484,7 +550,7 @@ export function TextBox({
         {announcement}
       </p>
       {kind === "letter" && value && result.reads && (
-        <Notice title="Reads as:">
+        <Notice title="Reads as:" icon="envelope-simple">
           <p>
             {result.reads.replace(
               /\bIMD\b/g,
@@ -516,6 +582,7 @@ export function AmountInput({
   hint,
   aside,
   invalid = false,
+  loading = false,
 }: {
   id: string;
   label: string;
@@ -525,29 +592,41 @@ export function AmountInput({
   hint?: ReactNode;
   aside?: ReactNode;
   invalid?: boolean;
+  loading?: boolean;
 }) {
   return (
-    <div className="field">
+    <div className="field" aria-busy={loading || undefined}>
       <div className="field__top">
-        <label className="field__label" htmlFor={id}>
-          {label}
-        </label>
+        {loading ? (
+          <span className="field__label">{label}</span>
+        ) : (
+          <label className="field__label" htmlFor={id}>
+            {label}
+          </label>
+        )}
         {aside && <span className="field__aside">{aside}</span>}
       </div>
       <div
         className={`input ${!onChange ? "input--readonly" : ""} ${invalid ? "is-invalid" : ""}`}
       >
-        <input
-          className="input__control"
-          id={id}
-          inputMode="decimal"
-          aria-invalid={invalid || undefined}
-          value={value}
-          readOnly={!onChange}
-          onChange={(e) => onChange?.(e.target.value)}
-          autoComplete="off"
-          aria-describedby={hint ? `${id}-hint` : undefined}
-        />
+        {loading ? (
+          <span
+            className="skeleton__line skeleton__line--mid"
+            aria-hidden="true"
+          />
+        ) : (
+          <input
+            className="input__control"
+            id={id}
+            inputMode="decimal"
+            aria-invalid={invalid || undefined}
+            value={value}
+            readOnly={!onChange}
+            onChange={(e) => onChange?.(e.target.value)}
+            autoComplete="off"
+            aria-describedby={hint ? `${id}-hint` : undefined}
+          />
+        )}
         <span className="input__unit">{unit}</span>
       </div>
       {hint && (
@@ -580,68 +659,69 @@ export function Action({
   block = false,
   small = false,
   describedBy,
+  lockedReason,
+  srLabel,
 }: {
   label: string;
   onRun: () => void;
   disabled?: boolean;
   reason?: ReactNode;
   busy?: boolean;
-  error?: string;
+  error?: string | import("./errors").ErrorMessage;
   hash?: string;
   done?: boolean;
   confirmed?: boolean;
   primary?: boolean;
   variant?: "ink";
   sub?: ReactNode;
-  connectText?: string;
+  connectText: string;
   walletLabel?: string;
   pendingLabel?: string;
   block?: boolean;
   small?: boolean;
   describedBy?: string;
+  lockedReason?: ReactNode;
+  srLabel?: string;
 }) {
   const id = useId();
   const { address, chainId } = useAccount();
   const { r } = useApp();
-  const unavailable = !address
-    ? connectText ||
-      "Connect in the top bar to " +
-        (/buy/i.test(label)
-          ? "buy"
-          : /plea|appeal/i.test(label)
-            ? "plead"
-            : /object/i.test(label)
-              ? "object"
-              : /claim/i.test(label)
-                ? "send a claim. Any wallet will do: it only pays the gas"
-                : /letter/i.test(label)
-                  ? "send a letter"
-                  : /record/i.test(label)
-                    ? "record points"
-                    : /close/i.test(label)
-                      ? "close the season"
-                      : label.toLowerCase()) +
-        "."
-    : chainId !== r.chain.id
-      ? "Switch to Sepolia in the top bar."
-      : reason ||
-        (disabled && !busy && !done && !describedBy
-          ? "Waiting for the required chain state."
-          : undefined);
+  const unavailable =
+    lockedReason ||
+    (!address
+      ? connectText
+      : chainId !== r.chain.id
+        ? "Switch to Sepolia in the top bar."
+        : reason ||
+          (disabled && !busy && !done && !describedBy
+            ? "Waiting for the required chain state."
+            : undefined));
   return (
     <div className="stack stack--sm">
       <button
         type="button"
         className={`btn ${block ? "btn--block" : ""} ${small ? "btn--sm" : ""} ${variant ? "btn--" + variant : primary ? "btn--primary" : ""}`}
         aria-disabled={
-          disabled || busy || done || !address || chainId !== r.chain.id
+          !!lockedReason ||
+          disabled ||
+          busy ||
+          done ||
+          !address ||
+          chainId !== r.chain.id
         }
         aria-busy={busy}
         aria-describedby={
           describedBy || (unavailable || error ? `${id}-note` : undefined)
         }
         onClick={() => {
-          if (!(disabled || busy || done || !address || chainId !== r.chain.id))
+          if (!(
+            !!lockedReason ||
+            disabled ||
+            busy ||
+            done ||
+            !address ||
+            chainId !== r.chain.id
+          ))
             onRun();
         }}
       >
@@ -656,6 +736,7 @@ export function Action({
         ) : (
           <>
             {label}
+            {srLabel && <span className="sr-only">{srLabel}</span>}
             {sub && <span className="btn__sub">{sub}</span>}
           </>
         )}
@@ -666,7 +747,18 @@ export function Action({
           className={`small ${error ? "bad-text" : "text-2"}`}
           role={error ? "alert" : undefined}
         >
-          {error || unavailable}
+          {error ? (
+            typeof error === "string" ? (
+              error
+            ) : (
+              <>
+                <b>{error.title}</b>
+                {error.body && <> {error.body}</>}
+              </>
+            )
+          ) : (
+            unavailable
+          )}
         </p>
       )}
       {hash && (
@@ -676,9 +768,11 @@ export function Action({
             target="_blank"
             rel="noreferrer"
           >
-            {(confirmed ?? done)
-              ? "Confirmed on Sepolia"
-              : "View pending transaction"}
+            {hash && error && !busy
+              ? "View the failed transaction"
+              : (confirmed ?? done)
+                ? "Confirmed on Sepolia"
+                : "View pending transaction"}
           </a>
         </p>
       )}
@@ -695,6 +789,10 @@ export function TxButton({
   primary = false,
   resetKey,
   small = false,
+  connectText,
+  lockedReason,
+  srLabel,
+  describedBy,
 }: {
   name: string;
   fn: string;
@@ -705,6 +803,10 @@ export function TxButton({
   primary?: boolean;
   resetKey?: string;
   small?: boolean;
+  connectText: string;
+  lockedReason?: ReactNode;
+  srLabel?: string;
+  describedBy?: string;
 }) {
   const tx = useTx(
     resetKey ||
@@ -715,6 +817,10 @@ export function TxButton({
   return (
     <Action
       {...tx}
+      connectText={connectText}
+      lockedReason={lockedReason}
+      srLabel={srLabel}
+      describedBy={describedBy}
       label={label}
       onRun={() => tx.send(name, fn, args)}
       disabled={disabled || !tx.ready}
@@ -739,6 +845,8 @@ export function ApprovedAction({
   sub,
   prepare,
   errors,
+  connectText,
+  lockedReason,
 }: {
   name: string;
   fn: string;
@@ -754,6 +862,8 @@ export function ApprovedAction({
   sub?: ReactNode;
   prepare?: () => Promise<any[] | undefined>;
   errors?: import("./errors").ErrorMap;
+  connectText: string;
+  lockedReason?: ReactNode;
 }) {
   const { r, s } = useApp();
   const { address } = useAccount();
@@ -779,6 +889,8 @@ export function ApprovedAction({
   return (
     <Action
       {...tx}
+      connectText={connectText}
+      lockedReason={lockedReason}
       done={tx.done && !lastWasApproval}
       confirmed={tx.done}
       label={
@@ -852,10 +964,12 @@ export function Stamp({
   p,
   large = false,
   staticTime = false,
+  size,
 }: {
   p: Plea;
   large?: boolean;
   staticTime?: boolean;
+  size?: "lg" | "xl";
 }) {
   const { s, now, landVerdict } = useApp();
   const state = pleaState(p, now, s!);
@@ -866,7 +980,7 @@ export function Stamp({
   }, [p.id, s, landVerdict, staticTime]);
   return (
     <span
-      className={`stamp stamp--${classFor[state]} ${large ? "stamp--lg" : ""} ${landKey === String(p.id) ? "stamp--land" : ""}`}
+      className={`stamp stamp--${classFor[state]} ${size ? `stamp--${size}` : large ? "stamp--lg" : ""} ${landKey === String(p.id) ? "stamp--land" : ""}`}
     >
       {state}
       <span className="stamp__sub">
@@ -875,13 +989,7 @@ export function Stamp({
             ? `until ${utc(Number(p.submittedAt) + Number(con(s, "CabalGate.PENDING_EXPIRY"))).slice(11)}`
             : `${duration(Number(p.submittedAt) + Number(con(s, "CabalGate.PENDING_EXPIRY")) - now)} left`
           : state === "NO VERDICT"
-            ? p.failure
-              ? p.failure.status === 1
-                ? "request refused"
-                : !p.failure.answered
-                  ? "no answer"
-                  : `panel split ${p.failure.agreed}/${p.failure.answered}`
-              : "no answer"
+            ? noVerdict(p, s!).sub
             : `${p.score} vs need ${p.need}`}
       </span>
     </span>
@@ -902,6 +1010,78 @@ export function ObjectionStamps({ p }: { p: Plea }) {
     </>
   );
 }
+export function PleaFoot({
+  p,
+  missedSeason = false,
+  hero = false,
+}: {
+  p: Plea;
+  missedSeason?: boolean;
+  hero?: boolean;
+}) {
+  const { s, now } = useApp(),
+    state = pleaState(p, now, s!),
+    quote = useSaleQuote(hero ? p : undefined),
+    earns = [2, 4, 5].includes(p.status) && !p.excluded && !p.standing?.[1],
+    appeal = s!.logs.find(
+      (l) => l.eventName === "PleaSubmitted" && l.args.originalId === p.id,
+    )?.args.id;
+  const canAppeal =
+    p.status === 3 &&
+    !p.isAppeal &&
+    !p.appealed &&
+    !!val(s, "CabalGate.cabalAlive") &&
+    now <= Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN"));
+  if (state === "PENDING")
+    return (
+      <>
+        <span>{tokenAmount(p.amount, s)}</span>
+        <span>need {p.need}</span>
+      </>
+    );
+  if (![2, 4, 5].includes(p.status))
+    return (
+      <>
+        <span>{tokenAmount(p.amount, s)}</span>
+        <span>no points</span>
+        {state === "NO VERDICT" && <span>no cooldown</span>}
+        {appeal ? (
+          <span>appealed in #{String(appeal)}</span>
+        ) : canAppeal ? (
+          <span>
+            appeal until{" "}
+            {clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}
+          </span>
+        ) : null}
+      </>
+    );
+  return (
+    <>
+      <span>
+        {p.status === 4
+          ? `Sold ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`
+          : state === "LAPSED"
+            ? `${tokenAmount(p.amount, s)} · not sold in ${Number(con(s, "CabalGate.EXECUTE_WINDOW")) / 60} min`
+            : `Sells ${tokenAmount(p.amount, s)}${hero && quote.data !== undefined ? ` ≈ ${tokenAmount(quote.data, s, true)}` : ""}`}
+      </span>
+      <span>
+        {earns && (p.points || 0) > 0
+          ? missedSeason
+            ? "not recorded before the season closed"
+            : `+${p.points} points${p.standing?.[0] ? " held" : ""}${hero && p.seat ? ` (${Math.min(p.score, Number(p.standing?.[2] ?? p.score))} × ${Number(con(s, "Seasons.SEAT_MULTIPLIER_BPS")) / 10000})` : ""}`
+          : "no points"}
+      </span>
+      {p.status === 2 && state !== "LAPSED" && (
+        <span>
+          sell by{" "}
+          {clock(
+            Number(p.verdictAt) + Number(con(s, "CabalGate.EXECUTE_WINDOW")),
+          )}
+        </span>
+      )}
+    </>
+  );
+}
 export function PleaCard({
   p,
   detail = false,
@@ -916,64 +1096,7 @@ export function PleaCard({
     prefix = useId(),
     state = pleaState(p, now, s!),
     earns = [2, 4, 5].includes(p.status) && !p.excluded && !p.standing?.[1];
-  const pts = earns
-      ? missedSeason
-        ? "not recorded before the season closed"
-        : `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}`
-      : "no points",
-    window = Number(con(s, "CabalGate.EXECUTE_WINDOW")),
-    appeal = s?.logs.find(
-      (l) => l.eventName === "PleaSubmitted" && l.args.originalId === p.id,
-    )?.args.id;
-  const nums = (
-    <>
-      {state === "PENDING" ? (
-        <>
-          <span>{tokenAmount(p.amount, s)}</span>
-          <span>need {p.need}</span>
-          <span>
-            expires{" "}
-            {clock(
-              Number(p.submittedAt) +
-                Number(con(s, "CabalGate.PENDING_EXPIRY")),
-            )}
-          </span>
-        </>
-      ) : state === "NO VERDICT" ? (
-        <>
-          <span>no points</span>
-          <span>no cooldown</span>
-        </>
-      ) : p.status === 3 ? (
-        <>
-          <span>no points</span>
-          <span>
-            {p.isAppeal ? (
-              "no further appeal"
-            ) : appeal ? (
-              <span>appealed in #{String(appeal)}</span>
-            ) : p.appealed ? (
-              "appealed"
-            ) : (
-              `appeal until ${clock(Number(p.verdictAt) + Number(con(s, "CabalGate.COOLDOWN")))}`
-            )}
-          </span>
-        </>
-      ) : (
-        <>
-          <span>{pts}</span>
-          {state === "APPROVED" ||
-          (state === "OVERTURNED" && p.status === 2) ? (
-            <span>sell by {clock(Number(p.verdictAt) + window)}</span>
-          ) : state === "LAPSED" ? (
-            <span>not sold in {window / 60} min</span>
-          ) : p.status === 4 ? (
-            <span>sold for {tokenAmount(soldFor(p, s!), s, true)}</span>
-          ) : null}
-        </>
-      )}
-    </>
-  );
+  const nums = <PleaFoot p={p} missedSeason={missedSeason} />;
   const content = (
     <>
       <div className="wall-card__top">
@@ -1032,15 +1155,7 @@ export function PleaCard({
     </>
   );
   return detail ? (
-    <article className="card plea stack">
-      {content}
-      <p className="plea__summary">
-        {p.status === 4
-          ? `Sold ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`
-          : `Sells ${tokenAmount(p.amount, s)}`}{" "}
-        · {pts}
-      </p>
-    </article>
+    <article className="card plea stack">{content}</article>
   ) : (
     <article className="wall-card linked-card">
       <a
@@ -1085,20 +1200,14 @@ export function HeroPlea({ p }: { p: Plea }) {
         </span>
       </div>
       <div className="hero-stamp">
-        <Stamp p={p} large />
+        <Stamp p={p} size="xl" />
       </div>
       <p className="plea__text">“{p.text}”</p>
       {p.facts && <FactCells parts={p.facts} total={p.factScore} />}
       <Meter fact={p.factScore} need={p.need} score={p.score} verdict={state} />
-      <p className="plea__summary">
-        {p.status === 4
-          ? `Sold ${tokenAmount(p.amount, s)} for ${tokenAmount(soldFor(p, s!), s, true)}`
-          : `Sells ${tokenAmount(p.amount, s)}`}{" "}
-        ·{" "}
-        {p.excluded || p.standing?.[1]
-          ? "no points"
-          : `+${p.points || 0} points${p.standing?.[0] ? " held" : ""}${p.seat ? ` (${p.score} × 1.2)` : ""}`}
-      </p>
+      <div className="plea__summary">
+        <PleaFoot p={p} hero />
+      </div>
       <div className="plea__actions">
         {p.status === 2 && now <= sell && (
           <Countdown
@@ -1120,6 +1229,13 @@ export function HeroPlea({ p }: { p: Plea }) {
           />
         )}
       </div>
+      {p.status === 2 && now <= sell && (
+        <p className="meta">
+          {mine
+            ? `Sell by ${clock(sell)}.${p.excluded || p.standing?.[1] ? "" : ` Record your +${p.points} points after ${clock(objection)}.`}`
+            : `${p.name || short(p.seller)} can sell until ${clock(sell)}.${caseState(p, s!, now).closed ? "" : ` Anyone else may object until ${clock(objection)}.`}`}
+        </p>
+      )}
       <a className="link-btn" href={`#/p/${p.id}`}>
         Open plea #{String(p.id)} <Icon name="arrow-right" />
       </a>
@@ -1196,42 +1312,50 @@ export function Meter({
     </div>
   );
 }
-export function FactCells({
-  parts,
-  total,
-}: {
-  parts?: {
-    share: number;
-    held: number;
-    profit: number;
-    trend: number;
-    total: number;
-    uncovered: bigint;
-    weighted: number;
-  };
-  total: number;
-}) {
+export function FactCells({ parts, total }: { parts?: any; total: number }) {
+  const id = useId();
   if (!parts)
     return <p className="small">Fact score {total}, read from the chain.</p>;
+  const share =
+    parts.shareBps == null
+      ? "no data"
+      : pct(parts.shareBps).replace(".00%", "%");
   const rows =
     parts.total === total && !parts.uncovered
       ? [
-          ["Share sold", parts.share],
-          ["Held", parts.held],
-          ["Profit or loss", parts.profit],
-          ["24h trend", parts.trend],
+          ["Share sold", share, parts.share],
+          [
+            "Held",
+            parts.heldFor == null ? "no data" : heldTime(parts.heldFor),
+            parts.held,
+          ],
+          [
+            "Profit or loss",
+            parts.pnlBps == null
+              ? "no data"
+              : signedPercent(
+                  Number(parts.pnlBps) / 100,
+                  Number(parts.pnlBps) % 100 ? 2 : 0,
+                ),
+            parts.profit,
+          ],
+          ["24h trend", parts.trendLabel || "flat", parts.trend],
         ]
       : [
-          ["Share sold", parts.share],
-          ["Held, profit and trend", total - parts.share],
+          ["Share sold", share, parts.share],
+          ["Held, profit and trend", "no data", total - parts.share],
         ];
   return (
     <>
-      <div className="facts">
-        {rows.map(([label, points]) => (
+      <span id={id} className="sr-only">
+        Facts from the chain
+      </span>
+      <div className="facts" role="group" aria-labelledby={id}>
+        {rows.map(([label, value, points]) => (
           <div className="fact" key={label}>
             <span className="fact__label">{label}</span>
-            <b className="fact__value">+{points}</b>
+            <b className="fact__value">{value}</b>
+            <span className="fact__pts">+{points}</span>
           </div>
         ))}
       </div>

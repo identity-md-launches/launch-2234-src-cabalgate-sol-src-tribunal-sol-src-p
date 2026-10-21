@@ -1,3 +1,5 @@
+import { classifyRpc, rpcFetch, registerHealthReset } from "./rpc-health";
+export { resetHealth } from "./rpc-health";
 import {
   createPublicClient,
   defineChain,
@@ -178,42 +180,40 @@ export function resilientTransport(
       timeout,
       retryCount: 0,
       batch: { batchSize: 5, wait: 16 },
+      fetchFn: rpcFetch,
     })({}),
+    logs: http(url, { timeout, retryCount: 0, fetchFn: rpcFetch })({}),
     down: 0,
   }));
+  registerHealthReset(() =>
+    endpoints.forEach((e) => {
+      e.down = 0;
+    }),
+  );
   return custom(
     {
       async request(args: any) {
-        let last: any;
-        for (const endpoint of endpoints) {
-          if (endpoint.down > Date.now()) continue;
+        let first: any;
+        const healthy = endpoints.filter((e) => e.down <= Date.now());
+        const candidates = healthy.length
+          ? healthy
+          : [...endpoints].sort((a, b) => a.down - b.down);
+        for (const endpoint of candidates) {
           try {
-            return await endpoint.transport.request(args);
-          } catch (e: any) {
-            const text = [
-              e?.shortMessage,
-              e?.message,
-              e?.details,
-              e?.cause?.details,
-              e?.body,
-            ].join(" ");
-            const status = e?.status || e?.cause?.status;
-            if (
-              /execution reverted|revert data|limited to \d+ blocks|block range|query returned|too many results/i.test(
-                text,
-              ) ||
-              (e?.code &&
-                e.code !== -1 &&
-                !/HTTP|fetch|network|timeout/i.test(text))
-            )
-              throw e;
-            if (status && status !== 429 && status < 500) throw e;
-            endpoint.down = Date.now() + cooldown;
-            last = e;
+            const result = await (
+              args.method === "eth_getLogs" ? endpoint.logs : endpoint.transport
+            ).request(args);
+            endpoint.down = 0;
+            return result;
+          } catch (e) {
+            const kind = classifyRpc(e);
+            if (kind === "request") throw e;
+            first ||= e;
+            if (kind === "transport") endpoint.down = Date.now() + cooldown;
           }
         }
         throw (
-          last ||
+          first ||
           Error(
             "The public RPC did not answer. The site tries the next one by itself; your funds are not affected.",
           )
